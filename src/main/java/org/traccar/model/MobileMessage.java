@@ -30,6 +30,9 @@ public class MobileMessage extends BaseModel {
     private String payloadHash;
     private Date created;
     private Date updated;
+    private Date leaseUntil;
+    private String leaseToken;
+    private int attempts;
 
     public long getDeviceId() {
         return deviceId;
@@ -93,6 +96,30 @@ public class MobileMessage extends BaseModel {
 
     public void setUpdated(Date updated) {
         this.updated = updated;
+    }
+
+    public Date getLeaseUntil() {
+        return leaseUntil;
+    }
+
+    public void setLeaseUntil(Date leaseUntil) {
+        this.leaseUntil = leaseUntil;
+    }
+
+    public String getLeaseToken() {
+        return leaseToken;
+    }
+
+    public void setLeaseToken(String leaseToken) {
+        this.leaseToken = leaseToken;
+    }
+
+    public int getAttempts() {
+        return attempts;
+    }
+
+    public void setAttempts(int attempts) {
+        this.attempts = attempts;
     }
 
 }

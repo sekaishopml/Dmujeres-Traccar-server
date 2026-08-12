@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd"
+  logicalFilePath="changelog-6.14.2">
+
+  <changeSet author="author" id="changelog-6.14.2-mobile-lease-rename">
+
+    <renameColumn tableName="tc_mobile_messages" oldColumnName="lease_until" newColumnName="leaseuntil" />
+    <renameColumn tableName="tc_mobile_messages" oldColumnName="lease_token" newColumnName="leasetoken" />
+
+  </changeSet>
+
+</databaseChangeLog>

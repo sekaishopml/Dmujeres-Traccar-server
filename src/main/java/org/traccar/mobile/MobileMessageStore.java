@@ -36,6 +36,11 @@ public class MobileMessageStore {
         this.storage = storage;
     }
 
+    /**
+     * Reserves a message as {@code processing} with a lease, or classifies an existing one.
+     * The lease fields are set here; claiming an expired {@code processing} row is done by
+     * {@link MobileAtomicPersistence#claim}.
+     */
     public Result reserve(long deviceId, MobileEnvelope envelope, byte[] payload) {
         String payloadHash;
         try {
@@ -51,6 +56,7 @@ public class MobileMessageStore {
             message.setSequence(envelope.getSequence());
             message.setStatus("processing");
             message.setPayloadHash(payloadHash);
+            message.setAttempts(0);
             message.setCreated(new Date());
             message.setUpdated(new Date());
             message.setId(storage.addObject(message, new Request(new Columns.Exclude("id", "positionId"))));
@@ -122,6 +128,18 @@ public class MobileMessageStore {
     public void complete(MobileMessage message, long positionId) throws StorageException {
         message.setPositionId(positionId);
         message.setStatus("accepted");
+        message.setLeaseUntil(null);
+        message.setLeaseToken(null);
+        message.setUpdated(new Date());
+        storage.updateObject(message, new Request(
+                new Columns.Exclude("id"), new Condition.Equals("id", message.getId())));
+    }
+
+    public void completeWithoutPosition(MobileMessage message) throws StorageException {
+        message.setPositionId(0);
+        message.setStatus("accepted");
+        message.setLeaseUntil(null);
+        message.setLeaseToken(null);
         message.setUpdated(new Date());
         storage.updateObject(message, new Request(
                 new Columns.Exclude("id"), new Condition.Equals("id", message.getId())));
@@ -129,6 +147,8 @@ public class MobileMessageStore {
 
     public void reject(MobileMessage message) throws StorageException {
         message.setStatus("rejected");
+        message.setLeaseUntil(null);
+        message.setLeaseToken(null);
         message.setUpdated(new Date());
         storage.updateObject(message, new Request(
                 new Columns.Exclude("id"), new Condition.Equals("id", message.getId())));

@@ -19,6 +19,7 @@ import org.traccar.LifecycleObject;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
 import org.traccar.database.DeviceLookupService;
+import org.traccar.handler.PositionPersistenceHandler;
 import org.traccar.handler.PositionPipeline;
 import org.traccar.helper.UnitsConverter;
 import org.traccar.model.Device;
@@ -51,6 +52,7 @@ public class MobileMqttConsumer implements LifecycleObject {
     private final ObjectMapper mapper;
     private final DeviceLookupService devices;
     private final MobileMessageStore messages;
+    private final MobileAtomicPersistence atomic;
     private final PositionPipeline pipeline;
     private final CacheManager cacheManager;
     private Mqtt5AsyncClient client;
@@ -62,11 +64,13 @@ public class MobileMqttConsumer implements LifecycleObject {
 
     @Inject
     public MobileMqttConsumer(Config config, ObjectMapper mapper, DeviceLookupService devices,
-            MobileMessageStore messages, PositionPipeline pipeline, CacheManager cacheManager) {
+            MobileMessageStore messages, MobileAtomicPersistence atomic,
+            PositionPipeline pipeline, CacheManager cacheManager) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
         this.messages = messages;
+        this.atomic = atomic;
         this.pipeline = pipeline;
         this.cacheManager = cacheManager;
     }
@@ -179,46 +183,65 @@ public class MobileMqttConsumer implements LifecycleObject {
             Device device = devices.lookup(new String[] {topicDeviceId});
             if (device == null) {
                 return acknowledgeAfter(publishAck(envelope, "rejected"), publish);
-            } else {
-                MobileMessageStore.Result result = messages.reserve(device.getId(), envelope, payload);
-                if (result.reservation() == MobileMessageStore.Reservation.DUPLICATE) {
-                    return acknowledgeAfter(publishAck(envelope, "duplicate"), publish);
-                } else if (result.reservation() == MobileMessageStore.Reservation.REJECTED) {
-                    return acknowledgeAfter(publishAck(envelope, "rejected"), publish);
-                } else if (result.reservation() == MobileMessageStore.Reservation.PROCESSING) {
-                    // Without a JDBC position-plus-dedupe transaction, keep this publish pending for redelivery.
-                    LOGGER.warn("Mobile message is already processing: {}", envelope.getMessageId());
-                } else if (result.reservation() == MobileMessageStore.Reservation.RESERVED) {
-                    Position position = toPosition(envelope, device.getId());
-                    MobileEnvelope acceptedEnvelope = envelope;
-                    MobileMessage acceptedMessage = result.message();
-                    String cacheKey = "mobile:" + acceptedEnvelope.getMessageId();
-                    cacheManager.addDevice(device.getId(), cacheKey);
-                    return pipeline.process(position).thenCompose(result2 -> {
-                        try {
-                            if (!result2.persisted()) {
-                                messages.reject(acceptedMessage);
-                                return acknowledgeAfter(publishAck(acceptedEnvelope, "rejected"), publish);
-                            }
-                            messages.complete(acceptedMessage, position.getId());
-                            return acknowledgeAfter(publishAck(acceptedEnvelope, "accepted"), publish);
-                        } catch (Exception completionError) {
-                            LOGGER.error("Mobile dedupe completion failed; leaving publish unacknowledged",
-                                    completionError);
-                            return CompletableFuture.failedFuture(completionError);
-                        }
-                    }).whenComplete((ignored, error) -> cacheManager.removeDevice(device.getId(), cacheKey))
-                    .exceptionallyCompose(error -> {
-                        try {
-                            messages.reject(acceptedMessage);
-                        } catch (Exception rejectError) {
-                            LOGGER.error("Failed to mark mobile message rejected; leaving publish unacknowledged",
-                                    rejectError);
-                        }
-                        return CompletableFuture.failedFuture(error);
-                    });
-                }
             }
+            MobileMessageStore.Result result = messages.reserve(device.getId(), envelope, payload);
+            if (result.reservation() == MobileMessageStore.Reservation.DUPLICATE) {
+                return acknowledgeAfter(publishAck(envelope, "duplicate"), publish);
+            } else if (result.reservation() == MobileMessageStore.Reservation.REJECTED) {
+                return acknowledgeAfter(publishAck(envelope, "rejected"), publish);
+            }
+
+            MobileMessage message = result.message();
+            MobileEnvelope acceptedEnvelope = envelope;
+            long leaseMs = config.getInteger(Keys.MOBILE_MQTT_LEASE_SECONDS) * 1000L;
+            String leaseToken = atomic.claim(message, leaseMs);
+            if (leaseToken == null) {
+                LOGGER.warn("Mobile message is still processing: {}", acceptedEnvelope.getMessageId());
+                return CompletableFuture.completedFuture(null);
+            }
+
+            Position position = toPosition(acceptedEnvelope, device.getId());
+            String cacheKey = "mobile:" + acceptedEnvelope.getMessageId();
+            cacheManager.addDevice(device.getId(), cacheKey);
+            PositionPersistenceHandler atomicHandler = new PositionPersistenceHandler() {
+                @Override
+                public CompletionStage<Boolean> persist(Position value) {
+                    return CompletableFuture.supplyAsync(() -> atomic.persist(message, value));
+                }
+            };
+            PositionPipeline.Executor pipelineExecutor = new PositionPipeline.Executor() {
+                @Override
+                public boolean inEventLoop() {
+                    return true;
+                }
+
+                @Override
+                public void execute(Runnable command) {
+                    command.run();
+                }
+            };
+            return pipeline.process(position, pipelineExecutor, atomicHandler)
+                    .whenComplete((ignored, error) -> cacheManager.removeDevice(device.getId(), cacheKey))
+                    .thenCompose(result2 -> {
+                        if (result2.persisted()) {
+                            return acknowledgeAfter(publishAck(acceptedEnvelope, "accepted"), publish);
+                        }
+                        if (result2.filtered()) {
+                            try {
+                                messages.completeWithoutPosition(message);
+                                return acknowledgeAfter(publishAck(acceptedEnvelope, "accepted"), publish);
+                            } catch (Exception completionError) {
+                                LOGGER.error("Failed to finalize filtered mobile message; "
+                                        + "leaving publish unacknowledged", completionError);
+                                return CompletableFuture.completedFuture(null);
+                            }
+                        }
+                        return CompletableFuture.completedFuture(null);
+                    })
+                    .exceptionally(error -> {
+                        LOGGER.error("Mobile atomic processing failed; leaving publish unacknowledged", error);
+                        return null;
+                    });
         } catch (Exception error) {
             LOGGER.warn("Invalid mobile MQTT message", error);
             if (envelope != null) {

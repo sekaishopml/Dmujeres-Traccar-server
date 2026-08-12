@@ -58,15 +58,17 @@ public final class QueryBuilder implements AutoCloseable {
     private final PreparedStatement statement;
     private final String query;
     private final boolean returnGeneratedKeys;
+    private final boolean ownsConnection;
 
     private QueryBuilder(
-            Config config, DataSource dataSource, ObjectMapper objectMapper,
-            String query, boolean returnGeneratedKeys) throws SQLException {
+            Config config, Connection connection, ObjectMapper objectMapper,
+            String query, boolean returnGeneratedKeys, boolean ownsConnection) throws SQLException {
         this.config = config;
         this.objectMapper = objectMapper;
         this.query = query;
         this.returnGeneratedKeys = returnGeneratedKeys;
-        connection = dataSource.getConnection();
+        this.ownsConnection = ownsConnection;
+        this.connection = connection;
         try {
             if (returnGeneratedKeys) {
                 statement = connection.prepareStatement(query, Statement.RETURN_GENERATED_KEYS);
@@ -74,20 +76,32 @@ public final class QueryBuilder implements AutoCloseable {
                 statement = connection.prepareStatement(query);
             }
         } catch (SQLException error) {
-            connection.close();
+            if (ownsConnection) {
+                connection.close();
+            }
             throw error;
         }
     }
 
     public static QueryBuilder create(
             Config config, DataSource dataSource, ObjectMapper objectMapper, String query) throws SQLException {
-        return new QueryBuilder(config, dataSource, objectMapper, query, false);
+        return new QueryBuilder(config, dataSource.getConnection(), objectMapper, query, false, true);
     }
 
     public static QueryBuilder create(
             Config config, DataSource dataSource, ObjectMapper objectMapper, String query,
             boolean returnGeneratedKeys) throws SQLException {
-        return new QueryBuilder(config, dataSource, objectMapper, query, returnGeneratedKeys);
+        return new QueryBuilder(config, dataSource.getConnection(), objectMapper, query, returnGeneratedKeys, true);
+    }
+
+    /**
+     * Creates a builder that reuses an existing connection, typically inside a transaction.
+     * The connection is not owned by the builder and is not closed when the builder is closed.
+     */
+    public static QueryBuilder create(
+            Config config, Connection connection, ObjectMapper objectMapper, String query,
+            boolean returnGeneratedKeys) throws SQLException {
+        return new QueryBuilder(config, connection, objectMapper, query, returnGeneratedKeys, false);
     }
 
     public void setBoolean(int index, boolean value) throws SQLException {
@@ -311,7 +325,9 @@ public final class QueryBuilder implements AutoCloseable {
         try {
             statement.close();
         } finally {
-            connection.close();
+            if (ownsConnection) {
+                connection.close();
+            }
         }
     }
 

@@ -114,13 +114,23 @@ public class PositionPipeline {
             public void execute(Runnable command) {
                 command.run();
             }
-        });
+        }, null);
     }
 
     public CompletionStage<Result> process(Position position, Executor executor) {
+        return process(position, executor, null);
+    }
+
+    /**
+     * Processes a position using an optional persistence override. The override replaces the
+     * {@link DatabaseHandler} persistence step, for example to write the position and a
+     * deduplication record in a single transaction.
+     */
+    public CompletionStage<Result> process(
+            Position position, Executor executor, PositionPersistenceHandler persistenceOverride) {
         CompletableFuture<Result> result = new CompletableFuture<>();
         try {
-            processPosition(position, executor, 0, true, result);
+            processPosition(position, executor, 0, true, persistenceOverride, result);
         } catch (Throwable error) {
             result.completeExceptionally(error);
         }
@@ -136,31 +146,36 @@ public class PositionPipeline {
     }
 
     private void processPosition(
-            Position position, Executor executor, int index, boolean persisted, CompletableFuture<Result> result) {
+            Position position, Executor executor, int index, boolean persisted,
+            PositionPersistenceHandler persistenceOverride, CompletableFuture<Result> result) {
         if (index == positionHandlers.size()) {
             processEvents(position, executor, persisted, result);
             return;
         }
 
-        BasePositionHandler handler = positionHandlers.get(index);
-        if (handler instanceof PositionPersistenceHandler persistenceHandler) {
+        BasePositionHandler baseHandler = positionHandlers.get(index);
+        if (baseHandler instanceof PositionPersistenceHandler) {
+            PositionPersistenceHandler persistenceHandler = persistenceOverride != null
+                    ? persistenceOverride : (PositionPersistenceHandler) baseHandler;
             persistenceHandler.persist(position).whenComplete((success, error) -> {
                 try {
                     continueProcessing(executor, () -> processPosition(position, executor, index + 1,
-                            persisted && error == null && Boolean.TRUE.equals(success), result));
+                            persisted && error == null && Boolean.TRUE.equals(success),
+                            persistenceOverride, result));
                 } catch (Throwable callbackError) {
                     result.completeExceptionally(callbackError);
                 }
             });
         } else {
             try {
-                handler.handlePosition(position, filtered -> {
+                baseHandler.handlePosition(position, filtered -> {
                     try {
                         continueProcessing(executor, () -> {
                             if (filtered) {
                                 result.complete(new Result(false, true));
                             } else {
-                                processPosition(position, executor, index + 1, persisted, result);
+                                processPosition(position, executor, index + 1, persisted,
+                                        persistenceOverride, result);
                             }
                         });
                     } catch (Throwable callbackError) {

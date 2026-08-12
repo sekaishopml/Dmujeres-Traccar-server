@@ -48,6 +48,9 @@ public final class Keys {
     public static final ConfigKey<Integer> MOBILE_MQTT_WORKER_QUEUE = new IntegerConfigKey(
             "mobile.mqtt.workerQueue", List.of(KeyType.CONFIG), 256);
 
+    public static final ConfigKey<Integer> MOBILE_MQTT_LEASE_SECONDS = new IntegerConfigKey(
+            "mobile.mqtt.leaseSeconds", List.of(KeyType.CONFIG), 60);
+
     /**
      * Network interface for the protocol. If not specified, the server will bind to all interfaces. Multiple addresses
      * (for example, one IPv4 and one IPv6) can be supplied as a comma-separated list.
