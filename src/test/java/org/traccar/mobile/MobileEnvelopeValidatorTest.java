@@ -48,7 +48,7 @@ public class MobileEnvelopeValidatorTest {
     @Test
     public void testRejectsExpiredPosition() {
         MobileEnvelope envelope = valid();
-        envelope.setObservedAt(Instant.parse("2026-08-01T11:59:59Z"));
+        envelope.setObservedAt("2026-08-01T11:59:59Z");
         assertThrows(IllegalArgumentException.class,
                 () -> MobileEnvelopeValidator.validate(envelope, "device-123", NOW));
     }
@@ -60,8 +60,8 @@ public class MobileEnvelopeValidatorTest {
         envelope.setMessageId("01J00000000000000000000000");
         envelope.setDeviceId("device-123");
         envelope.setSequence(1);
-        envelope.setSentAt(NOW);
-        envelope.setObservedAt(NOW);
+        envelope.setSentAt(NOW.toString());
+        envelope.setObservedAt(NOW.toString());
         MobileEnvelope.Payload payload = new MobileEnvelope.Payload();
         payload.setLatitude(-33.45);
         payload.setLongitude(-70.67);

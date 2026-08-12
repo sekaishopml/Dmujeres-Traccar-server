@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import java.util.Date;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class MobileMessageTest {
 
@@ -45,7 +44,7 @@ public class MobileMessageTest {
         assertEquals(message.getMessageId(), parsed.getMessageId());
         assertEquals(message.getSequence(), parsed.getSequence());
         assertEquals(message.getStatus(), parsed.getStatus());
-        assertNull(parsed.getPositionId());
+        assertEquals(message.getPositionId(), parsed.getPositionId());
         assertEquals(message.getPayloadHash(), parsed.getPayloadHash());
         assertEquals(message.getCreated(), parsed.getCreated());
         assertEquals(message.getUpdated(), parsed.getUpdated());

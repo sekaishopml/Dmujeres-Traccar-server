@@ -21,6 +21,33 @@ public final class Keys {
 
     private Keys() {}
 
+    public static final ConfigKey<Boolean> MOBILE_MQTT_ENABLE = new BooleanConfigKey(
+            "mobile.mqtt.enable", List.of(KeyType.CONFIG), false);
+
+    public static final ConfigKey<String> MOBILE_MQTT_URL = new StringConfigKey(
+            "mobile.mqtt.url", List.of(KeyType.CONFIG));
+
+    public static final ConfigKey<String> MOBILE_MQTT_TOPIC = new StringConfigKey(
+            "mobile.mqtt.topic", List.of(KeyType.CONFIG), "dmj/v1/devices/+/telemetry");
+
+    public static final ConfigKey<String> MOBILE_MQTT_ACK_TOPIC = new StringConfigKey(
+            "mobile.mqtt.ackTopic", List.of(KeyType.CONFIG), "dmj/v1/devices/{deviceId}/ack");
+
+    public static final ConfigKey<String> MOBILE_MQTT_CLIENT_ID = new StringConfigKey(
+            "mobile.mqtt.clientId", List.of(KeyType.CONFIG));
+
+    public static final ConfigKey<String> MOBILE_MQTT_USERNAME = new StringConfigKey(
+            "mobile.mqtt.username", List.of(KeyType.CONFIG));
+
+    public static final ConfigKey<String> MOBILE_MQTT_PASSWORD = new StringConfigKey(
+            "mobile.mqtt.password", List.of(KeyType.CONFIG));
+
+    public static final ConfigKey<Integer> MOBILE_MQTT_MAX_PAYLOAD = new IntegerConfigKey(
+            "mobile.mqtt.maxPayload", List.of(KeyType.CONFIG), 65536);
+
+    public static final ConfigKey<Integer> MOBILE_MQTT_WORKER_QUEUE = new IntegerConfigKey(
+            "mobile.mqtt.workerQueue", List.of(KeyType.CONFIG), 256);
+
     /**
      * Network interface for the protocol. If not specified, the server will bind to all interfaces. Multiple addresses
      * (for example, one IPv4 and one IPv6) can be supplied as a comma-separated list.

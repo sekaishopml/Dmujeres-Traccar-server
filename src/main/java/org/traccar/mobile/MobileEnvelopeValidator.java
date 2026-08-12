@@ -43,10 +43,18 @@ public final class MobileEnvelopeValidator {
         require(envelope.getObservedAt() != null, "observedAt is required");
         require(envelope.getPayload() != null, "payload is required");
 
+        Instant observedAt;
+        Instant sentAt;
+        try {
+            observedAt = Instant.parse(envelope.getObservedAt());
+            sentAt = Instant.parse(envelope.getSentAt());
+        } catch (Exception error) {
+            throw new IllegalArgumentException("invalid timestamp", error);
+        }
         Instant oldest = now.minus(MAX_AGE_DAYS, ChronoUnit.DAYS);
         Instant newest = now.plus(MAX_FUTURE_SECONDS, ChronoUnit.SECONDS);
-        require(!envelope.getObservedAt().isBefore(oldest), "observedAt is expired");
-        require(!envelope.getSentAt().isAfter(newest), "sentAt is in the future");
+        require(!observedAt.isBefore(oldest), "observedAt is expired");
+        require(!sentAt.isAfter(newest), "sentAt is in the future");
 
         MobileEnvelope.Payload payload = envelope.getPayload();
         require(Double.isFinite(payload.getLatitude())

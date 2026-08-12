@@ -15,8 +15,6 @@
  */
 package org.traccar.mobile;
 
-import java.time.Instant;
-
 public class MobileEnvelope {
 
     private int schema;
@@ -24,8 +22,8 @@ public class MobileEnvelope {
     private String messageId;
     private String deviceId;
     private long sequence;
-    private Instant sentAt;
-    private Instant observedAt;
+    private String sentAt;
+    private String observedAt;
     private Payload payload;
 
     public int getSchema() {
@@ -68,19 +66,19 @@ public class MobileEnvelope {
         this.sequence = sequence;
     }
 
-    public Instant getSentAt() {
+    public String getSentAt() {
         return sentAt;
     }
 
-    public void setSentAt(Instant sentAt) {
+    public void setSentAt(String sentAt) {
         this.sentAt = sentAt;
     }
 
-    public Instant getObservedAt() {
+    public String getObservedAt() {
         return observedAt;
     }
 
-    public void setObservedAt(Instant observedAt) {
+    public void setObservedAt(String observedAt) {
         this.observedAt = observedAt;
     }
 

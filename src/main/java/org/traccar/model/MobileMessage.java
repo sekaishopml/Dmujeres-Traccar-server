@@ -26,7 +26,7 @@ public class MobileMessage extends BaseModel {
     private String messageId;
     private long sequence;
     private String status;
-    private Long positionId;
+    private long positionId;
     private String payloadHash;
     private Date created;
     private Date updated;
@@ -63,11 +63,11 @@ public class MobileMessage extends BaseModel {
         this.status = status;
     }
 
-    public Long getPositionId() {
+    public long getPositionId() {
         return positionId;
     }
 
-    public void setPositionId(Long positionId) {
+    public void setPositionId(long positionId) {
         this.positionId = positionId;
     }
 
