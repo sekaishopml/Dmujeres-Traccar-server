@@ -18,43 +18,36 @@ import org.slf4j.LoggerFactory;
 import org.traccar.LifecycleObject;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
-import org.traccar.database.DeviceLookupService;
-import org.traccar.handler.PositionPersistenceHandler;
-import org.traccar.handler.PositionPipeline;
-import org.traccar.helper.UnitsConverter;
-import org.traccar.model.Device;
-import org.traccar.model.MobileMessage;
-import org.traccar.model.Position;
-import org.traccar.session.cache.CacheManager;
+import org.traccar.mobile.MobileIngestionService.AckStatus;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Date;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * MQTT 5 consumer for the mobile channel. Delegates validation, deduplication and atomic
+ * persistence to {@link MobileIngestionService}; only publishes the application ACK and
+ * controls MQTT acknowledgement/redelivery.
+ */
 @Singleton
 public class MobileMqttConsumer implements LifecycleObject {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MobileMqttConsumer.class);
     private final Config config;
     private final ObjectMapper mapper;
-    private final DeviceLookupService devices;
-    private final MobileMessageStore messages;
-    private final MobileAtomicPersistence atomic;
-    private final PositionPipeline pipeline;
-    private final CacheManager cacheManager;
+    private final MobileIngestionService ingestion;
     private Mqtt5AsyncClient client;
     private ExecutorService workers;
     private Semaphore capacity;
@@ -63,16 +56,10 @@ public class MobileMqttConsumer implements LifecycleObject {
     private final AtomicLong queueFullCount = new AtomicLong();
 
     @Inject
-    public MobileMqttConsumer(Config config, ObjectMapper mapper, DeviceLookupService devices,
-            MobileMessageStore messages, MobileAtomicPersistence atomic,
-            PositionPipeline pipeline, CacheManager cacheManager) {
+    public MobileMqttConsumer(Config config, ObjectMapper mapper, MobileIngestionService ingestion) {
         this.config = config;
         this.mapper = mapper;
-        this.devices = devices;
-        this.messages = messages;
-        this.atomic = atomic;
-        this.pipeline = pipeline;
-        this.cacheManager = cacheManager;
+        this.ingestion = ingestion;
     }
 
     @Override
@@ -175,81 +162,20 @@ public class MobileMqttConsumer implements LifecycleObject {
     }
 
     private CompletionStage<Void> processSerial(Mqtt5Publish publish, String topicDeviceId) {
-        byte[] payload = publish.getPayloadAsBytes();
-        MobileEnvelope envelope = null;
-        try {
-            envelope = mapper.readValue(payload, MobileEnvelope.class);
-            MobileEnvelopeValidator.validate(envelope, topicDeviceId, Instant.now());
-            Device device = devices.lookup(new String[] {topicDeviceId});
-            if (device == null) {
-                return acknowledgeAfter(publishAck(envelope, "rejected"), publish);
-            }
-            MobileMessageStore.Result result = messages.reserve(device.getId(), envelope, payload);
-            if (result.reservation() == MobileMessageStore.Reservation.DUPLICATE) {
-                return acknowledgeAfter(publishAck(envelope, "duplicate"), publish);
-            } else if (result.reservation() == MobileMessageStore.Reservation.REJECTED) {
-                return acknowledgeAfter(publishAck(envelope, "rejected"), publish);
-            }
-
-            MobileMessage message = result.message();
-            MobileEnvelope acceptedEnvelope = envelope;
-            long leaseMs = config.getInteger(Keys.MOBILE_MQTT_LEASE_SECONDS) * 1000L;
-            String leaseToken = atomic.claim(message, leaseMs);
-            if (leaseToken == null) {
-                LOGGER.warn("Mobile message is still processing: {}", acceptedEnvelope.getMessageId());
-                return CompletableFuture.completedFuture(null);
-            }
-
-            Position position = toPosition(acceptedEnvelope, device.getId());
-            String cacheKey = "mobile:" + acceptedEnvelope.getMessageId();
-            cacheManager.addDevice(device.getId(), cacheKey);
-            PositionPersistenceHandler atomicHandler = new PositionPersistenceHandler() {
-                @Override
-                public CompletionStage<Boolean> persist(Position value) {
-                    return CompletableFuture.supplyAsync(() -> atomic.persist(message, value));
-                }
-            };
-            PositionPipeline.Executor pipelineExecutor = new PositionPipeline.Executor() {
-                @Override
-                public boolean inEventLoop() {
-                    return true;
-                }
-
-                @Override
-                public void execute(Runnable command) {
-                    command.run();
-                }
-            };
-            return pipeline.process(position, pipelineExecutor, atomicHandler)
-                    .whenComplete((ignored, error) -> cacheManager.removeDevice(device.getId(), cacheKey))
-                    .thenCompose(result2 -> {
-                        if (result2.persisted()) {
-                            return acknowledgeAfter(publishAck(acceptedEnvelope, "accepted"), publish);
-                        }
-                        if (result2.filtered()) {
-                            try {
-                                messages.completeWithoutPosition(message);
-                                return acknowledgeAfter(publishAck(acceptedEnvelope, "accepted"), publish);
-                            } catch (Exception completionError) {
-                                LOGGER.error("Failed to finalize filtered mobile message; "
-                                        + "leaving publish unacknowledged", completionError);
-                                return CompletableFuture.completedFuture(null);
-                            }
-                        }
+        return ingestion.process(publish.getPayloadAsBytes(), topicDeviceId)
+                .thenCompose(result -> {
+                    if (result.status() == AckStatus.PENDING) {
+                        LOGGER.warn("Mobile message pending; leaving publish unacknowledged: {}",
+                                result.envelope() != null ? result.envelope().getMessageId() : topicDeviceId);
                         return CompletableFuture.completedFuture(null);
-                    })
-                    .exceptionally(error -> {
-                        LOGGER.error("Mobile atomic processing failed; leaving publish unacknowledged", error);
-                        return null;
-                    });
-        } catch (Exception error) {
-            LOGGER.warn("Invalid mobile MQTT message", error);
-            if (envelope != null) {
-                return acknowledgeAfter(publishAck(envelope, error.getMessage() != null
-                        && error.getMessage().contains("expired") ? "expired" : "invalid"), publish);
-            }
-        }
-        return CompletableFuture.completedFuture(null);
+                    }
+                    if (result.envelope() == null) {
+                        publish.acknowledge();
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    String status = result.status().name().toLowerCase();
+                    return acknowledgeAfter(publishAck(result.envelope(), status), publish);
+                });
     }
 
     private CompletionStage<Void> acknowledgeAfter(CompletionStage<?> acknowledgement, Mqtt5Publish publish) {
@@ -284,29 +210,6 @@ public class MobileMqttConsumer implements LifecycleObject {
             throw new IllegalArgumentException("topic has no device wildcard");
         }
         return deviceId;
-    }
-
-    public static Position toPosition(MobileEnvelope envelope, long deviceId) {
-        MobileEnvelope.Payload value = envelope.getPayload();
-        Position position = new Position("dmj-mqtt");
-        position.setDeviceId(deviceId);
-        position.setTime(Date.from(Instant.parse(envelope.getObservedAt())));
-        position.setLatitude(value.getLatitude());
-        position.setLongitude(value.getLongitude());
-        if (value.getAccuracy() != null) {
-            position.setAccuracy(value.getAccuracy());
-        }
-        if (value.getAltitude() != null) {
-            position.setAltitude(value.getAltitude());
-        }
-        if (value.getBearing() != null) {
-            position.setCourse(value.getBearing());
-        }
-        if (value.getSpeed() != null) {
-            position.setSpeed(UnitsConverter.knotsFromKph(value.getSpeed()));
-        }
-        position.setValid(true);
-        return position;
     }
 
     private CompletionStage<?> publishAck(MobileEnvelope envelope, String status) {

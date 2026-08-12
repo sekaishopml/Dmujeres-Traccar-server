@@ -16,8 +16,6 @@ import org.traccar.storage.query.Columns;
 import org.traccar.storage.query.Condition;
 import org.traccar.storage.query.Request;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Date;
 
 @Singleton
@@ -41,10 +39,8 @@ public class MobileMessageStore {
      * The lease fields are set here; claiming an expired {@code processing} row is done by
      * {@link MobileAtomicPersistence#claim}.
      */
-    public Result reserve(long deviceId, MobileEnvelope envelope, byte[] payload) {
-        String payloadHash;
+    public Result reserve(long deviceId, MobileEnvelope envelope, String payloadHash) {
         try {
-            payloadHash = hash(payload);
             MobileMessage existing = findExisting(deviceId, envelope);
             if (existing != null) {
                 return classify(existing, deviceId, envelope, payloadHash);
@@ -68,7 +64,7 @@ public class MobileMessageStore {
                     if (existing != null) {
                         LOGGER.info("Mobile dedupe reservation lost a concurrent insert: {}",
                                 envelope.getMessageId());
-                        return classify(existing, deviceId, envelope, payloadHashOrNull(payload));
+                        return classify(existing, deviceId, envelope, payloadHash);
                     }
                 } catch (Exception lookupError) {
                     LOGGER.warn("Failed to resolve concurrent mobile reservation {}",
@@ -117,14 +113,6 @@ public class MobileMessageStore {
         return false;
     }
 
-    private static String payloadHashOrNull(byte[] payload) {
-        try {
-            return hash(payload);
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException(error);
-        }
-    }
-
     public void complete(MobileMessage message, long positionId) throws StorageException {
         message.setPositionId(positionId);
         message.setStatus("accepted");
@@ -152,14 +140,5 @@ public class MobileMessageStore {
         message.setUpdated(new Date());
         storage.updateObject(message, new Request(
                 new Columns.Exclude("id"), new Condition.Equals("id", message.getId())));
-    }
-
-    private static String hash(byte[] payload) throws NoSuchAlgorithmException {
-        byte[] digest = MessageDigest.getInstance("SHA-256").digest(payload);
-        StringBuilder result = new StringBuilder(64);
-        for (byte value : digest) {
-            result.append("%02x".formatted(value & 0xff));
-        }
-        return result.toString();
     }
 }

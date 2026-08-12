@@ -51,6 +51,12 @@ public final class Keys {
     public static final ConfigKey<Integer> MOBILE_MQTT_LEASE_SECONDS = new IntegerConfigKey(
             "mobile.mqtt.leaseSeconds", List.of(KeyType.CONFIG), 60);
 
+    public static final ConfigKey<Boolean> MOBILE_HTTP_ENABLE = new BooleanConfigKey(
+            "mobile.http.enable", List.of(KeyType.CONFIG), false);
+
+    public static final ConfigKey<String> MOBILE_HTTP_API_KEY = new StringConfigKey(
+            "mobile.http.apiKey", List.of(KeyType.CONFIG));
+
     /**
      * Network interface for the protocol. If not specified, the server will bind to all interfaces. Multiple addresses
      * (for example, one IPv4 and one IPv6) can be supplied as a comma-separated list.

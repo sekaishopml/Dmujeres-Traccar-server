@@ -31,6 +31,6 @@ public class MobileMqttConsumerTest {
         payload.setLongitude(2);
         payload.setSpeed(36.0);
         envelope.setPayload(payload);
-        assertEquals(19.438452, MobileMqttConsumer.toPosition(envelope, 7).getSpeed(), 0.000001);
+        assertEquals(19.438452, MobileIngestionService.toPosition(envelope, 7).getSpeed(), 0.000001);
     }
 }
