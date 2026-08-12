@@ -12,5 +12,6 @@ out
 build
 .vscode
 bin
-conf
+conf/*
+!conf/*.example
 logs
