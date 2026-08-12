@@ -15,7 +15,6 @@
  */
 package org.traccar;
 
-import com.google.inject.Injector;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -23,39 +22,7 @@ import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import org.traccar.config.Config;
 import org.traccar.database.BufferingManager;
-import org.traccar.database.NotificationManager;
-import org.traccar.handler.BasePositionHandler;
-import org.traccar.handler.ComputedAttributesHandler;
-import org.traccar.handler.CopyAttributesHandler;
-import org.traccar.handler.DatabaseHandler;
-import org.traccar.handler.DistanceHandler;
-import org.traccar.handler.DriverHandler;
-import org.traccar.handler.EngineHoursHandler;
-import org.traccar.handler.FilterHandler;
-import org.traccar.handler.GeocoderHandler;
-import org.traccar.handler.GeofenceHandler;
-import org.traccar.handler.GeolocationHandler;
-import org.traccar.handler.HemisphereHandler;
-import org.traccar.handler.MapMatcherHandler;
-import org.traccar.handler.MotionHandler;
-import org.traccar.handler.OutdatedHandler;
-import org.traccar.handler.PositionForwardingHandler;
-import org.traccar.handler.PostProcessHandler;
-import org.traccar.handler.SpeedLimitHandler;
-import org.traccar.handler.TimeHandler;
-import org.traccar.handler.events.AlarmEventHandler;
-import org.traccar.handler.events.BaseEventHandler;
-import org.traccar.handler.events.BehaviorEventHandler;
-import org.traccar.handler.events.CommandResultEventHandler;
-import org.traccar.handler.events.DriverEventHandler;
-import org.traccar.handler.events.FuelEventHandler;
-import org.traccar.handler.events.GeofenceEventHandler;
-import org.traccar.handler.events.IgnitionEventHandler;
-import org.traccar.handler.events.MaintenanceEventHandler;
-import org.traccar.handler.events.MediaEventHandler;
-import org.traccar.handler.events.MotionEventHandler;
-import org.traccar.handler.events.OverspeedEventHandler;
-import org.traccar.handler.events.ProximityEventHandler;
+import org.traccar.handler.PositionPipeline;
 import org.traccar.handler.network.AcknowledgementHandler;
 import org.traccar.helper.PositionLogger;
 import org.traccar.model.Position;
@@ -63,23 +30,17 @@ import org.traccar.session.cache.CacheManager;
 
 import java.util.HashMap;
 import java.util.LinkedList;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Queue;
-import java.util.stream.Stream;
 
 @Singleton
 @ChannelHandler.Sharable
 public class ProcessingHandler extends ChannelInboundHandlerAdapter implements BufferingManager.Callback {
 
     private final CacheManager cacheManager;
-    private final NotificationManager notificationManager;
     private final PositionLogger positionLogger;
     private final BufferingManager bufferingManager;
-    private final List<BasePositionHandler> positionHandlers;
-    private final List<BaseEventHandler> eventHandlers;
-    private final PostProcessHandler postProcessHandler;
+    private final PositionPipeline positionPipeline;
 
     private record QueuedPosition(ChannelHandlerContext ctx, Position position) {}
 
@@ -91,54 +52,12 @@ public class ProcessingHandler extends ChannelInboundHandlerAdapter implements B
 
     @Inject
     public ProcessingHandler(
-            Injector injector, Config config,
-            CacheManager cacheManager, NotificationManager notificationManager, PositionLogger positionLogger) {
+            Config config,
+            CacheManager cacheManager, PositionLogger positionLogger, PositionPipeline positionPipeline) {
         this.cacheManager = cacheManager;
-        this.notificationManager = notificationManager;
         this.positionLogger = positionLogger;
         bufferingManager = new BufferingManager(config, this);
-
-        positionHandlers = Stream.of(
-                ComputedAttributesHandler.Early.class,
-                OutdatedHandler.class,
-                TimeHandler.class,
-                GeolocationHandler.class,
-                HemisphereHandler.class,
-                MapMatcherHandler.class,
-                DistanceHandler.class,
-                FilterHandler.class,
-                GeofenceHandler.class,
-                GeocoderHandler.class,
-                SpeedLimitHandler.class,
-                MotionHandler.class,
-                ComputedAttributesHandler.Late.class,
-                DriverHandler.class,
-                CopyAttributesHandler.class,
-                EngineHoursHandler.class,
-                PositionForwardingHandler.class,
-                DatabaseHandler.class)
-                .map((clazz) -> (BasePositionHandler) injector.getInstance(clazz))
-                .filter(Objects::nonNull)
-                .toList();
-
-        eventHandlers = Stream.of(
-                MediaEventHandler.class,
-                CommandResultEventHandler.class,
-                OverspeedEventHandler.class,
-                BehaviorEventHandler.class,
-                FuelEventHandler.class,
-                MotionEventHandler.class,
-                GeofenceEventHandler.class,
-                ProximityEventHandler.class,
-                AlarmEventHandler.class,
-                IgnitionEventHandler.class,
-                MaintenanceEventHandler.class,
-                DriverEventHandler.class)
-                .map((clazz) -> (BaseEventHandler) injector.getInstance(clazz))
-                .filter(Objects::nonNull)
-                .toList();
-
-        postProcessHandler = injector.getInstance(PostProcessHandler.class);
+        this.positionPipeline = positionPipeline;
     }
 
     @Override
@@ -165,47 +84,35 @@ public class ProcessingHandler extends ChannelInboundHandlerAdapter implements B
     }
 
     private void processPositionHandlers(ChannelHandlerContext ctx, Position position) {
-        var iterator = positionHandlers.iterator();
-        iterator.next().handlePosition(position, new BasePositionHandler.Callback() {
+        positionPipeline.process(position, new PositionPipeline.Executor() {
             @Override
-            public void processed(boolean filtered) {
-                Runnable continuation = () -> {
-                    if (!filtered) {
-                        if (iterator.hasNext()) {
-                            iterator.next().handlePosition(position, this);
-                        } else {
-                            processEventHandlers(ctx, position);
-                        }
-                    } else {
-                        finishedProcessing(ctx, position, true);
-                    }
-                };
-                if (ctx.executor().inEventLoop()) {
-                    continuation.run();
-                } else {
-                    ctx.executor().execute(continuation);
+            public boolean inEventLoop() {
+                return ctx.executor().inEventLoop();
+            }
+
+            @Override
+            public void execute(Runnable command) {
+                ctx.executor().execute(command);
+            }
+        }).whenComplete((result, error) -> {
+            if (error != null) {
+                try {
+                    ctx.fireExceptionCaught(error);
+                } finally {
+                    finishedProcessing(ctx, position, true);
                 }
+            } else {
+                finishedProcessing(ctx, position, result.filtered());
             }
         });
     }
 
-    private void processEventHandlers(ChannelHandlerContext ctx, Position position) {
-        eventHandlers.forEach(handler -> handler.analyzePosition(
-                position, (event) -> notificationManager.updateEvents(Map.of(event, position))));
-        finishedProcessing(ctx, position, false);
-    }
-
     private void finishedProcessing(ChannelHandlerContext ctx, Position position, boolean filtered) {
         if (!filtered) {
-            postProcessHandler.handlePosition(position, ignore -> {
-                positionLogger.log(ctx, position);
-                ctx.writeAndFlush(new AcknowledgementHandler.EventHandled(position));
-                processNextPosition(position.getDeviceId());
-            });
-        } else {
-            ctx.writeAndFlush(new AcknowledgementHandler.EventHandled(position));
-            processNextPosition(position.getDeviceId());
+            positionLogger.log(ctx, position);
         }
+        ctx.writeAndFlush(new AcknowledgementHandler.EventHandled(position));
+        processNextPosition(position.getDeviceId());
         cacheManager.removeDevice(position.getDeviceId(), position);
     }
 

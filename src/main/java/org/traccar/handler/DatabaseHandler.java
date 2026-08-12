@@ -22,7 +22,7 @@ import org.traccar.database.PositionBatchWriter;
 import org.traccar.database.StatisticsManager;
 import org.traccar.model.Position;
 
-public class DatabaseHandler extends BasePositionHandler {
+public class DatabaseHandler extends BasePositionHandler implements PositionPersistenceHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DatabaseHandler.class);
 
@@ -37,14 +37,19 @@ public class DatabaseHandler extends BasePositionHandler {
 
     @Override
     public void onPosition(Position position, Callback callback) {
-        batchWriter.submit(position).whenComplete((id, error) -> {
+        persist(position).whenComplete((success, error) -> callback.processed(false));
+    }
+
+    @Override
+    public java.util.concurrent.CompletionStage<Boolean> persist(Position position) {
+        return batchWriter.submit(position).handle((id, error) -> {
             if (error == null) {
                 position.setId(id);
                 statisticsManager.registerMessageStored(position.getDeviceId(), position.getProtocol());
-            } else {
-                LOGGER.warn("Failed to store position", error);
+                return true;
             }
-            callback.processed(false);
+            LOGGER.warn("Failed to store position", error);
+            return false;
         });
     }
 
