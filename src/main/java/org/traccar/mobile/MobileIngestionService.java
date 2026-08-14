@@ -19,6 +19,7 @@ import org.traccar.helper.UnitsConverter;
 import org.traccar.model.Device;
 import org.traccar.model.MobileMessage;
 import org.traccar.model.Position;
+import org.traccar.session.ConnectionManager;
 import org.traccar.session.cache.CacheManager;
 
 import java.security.MessageDigest;
@@ -49,11 +50,12 @@ public class MobileIngestionService {
     private final MobileAtomicPersistence atomic;
     private final PositionPipeline pipeline;
     private final CacheManager cacheManager;
+    private final ConnectionManager connectionManager;
 
     @Inject
     public MobileIngestionService(Config config, ObjectMapper mapper, DeviceLookupService devices,
             MobileMessageStore messages, MobileAtomicPersistence atomic,
-            PositionPipeline pipeline, CacheManager cacheManager) {
+            PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -61,6 +63,7 @@ public class MobileIngestionService {
         this.atomic = atomic;
         this.pipeline = pipeline;
         this.cacheManager = cacheManager;
+        this.connectionManager = connectionManager;
     }
 
     public CompletionStage<Result> process(byte[] payload, String topicDeviceId) {
@@ -113,6 +116,9 @@ public class MobileIngestionService {
                     .whenComplete((ignored, error) -> cacheManager.removeDevice(device.getId(), cacheKey))
                     .thenApply(result2 -> {
                         if (result2.persisted()) {
+                            // El dispositivo queda ONLINE en el panel (con hora actual);
+                            // el sweep de tiempo de espera lo pasa a desconocido/offline.
+                            connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             return new Result(AckStatus.ACCEPTED, captured);
                         }
                         if (result2.filtered()) {
