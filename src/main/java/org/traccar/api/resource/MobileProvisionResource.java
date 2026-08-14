@@ -121,7 +121,21 @@ public class MobileProvisionResource extends BaseResource {
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() == 409) {
-            throw new IllegalArgumentException("MQTT username already exists");
+            // Idempotente: si el usuario MQTT ya existe, se actualiza su contraseña.
+            String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
+            String updateBody = objectMapper.writeValueAsString(new PasswordUpdate(password));
+            HttpRequest update = HttpRequest.newBuilder(URI.create(endpoint + "/" + encoded))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Authorization", authorization)
+                    .header("Content-Type", MediaType.APPLICATION_JSON)
+                    .PUT(HttpRequest.BodyPublishers.ofString(updateBody))
+                    .build();
+            HttpResponse<String> updateResponse = httpClient.send(update, HttpResponse.BodyHandlers.ofString());
+            if (updateResponse.statusCode() < 200 || updateResponse.statusCode() >= 300) {
+                throw new StorageException("EMQX user update failed: HTTP " + updateResponse.statusCode()
+                        + " body=" + updateResponse.body());
+            }
+            return;
         }
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new StorageException("EMQX user creation failed: HTTP " + response.statusCode());
@@ -199,6 +213,8 @@ public class MobileProvisionResource extends BaseResource {
     public record ProvisionResponse(long deviceId, String username, int intervalSeconds, int bufferMax) {}
 
     private record MqttUser(String user_id, String password, boolean is_superuser) {}
+
+    private record PasswordUpdate(String password) {}
 
     private record DashboardLogin(String username, String password) {}
 }
