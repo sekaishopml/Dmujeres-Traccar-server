@@ -57,6 +57,24 @@ public final class Keys {
     public static final ConfigKey<String> MOBILE_HTTP_API_KEY = new StringConfigKey(
             "mobile.http.apiKey", List.of(KeyType.CONFIG));
 
+    public static final ConfigKey<String> EMQX_API_URL = new StringConfigKey(
+            "emqx.apiUrl", List.of(KeyType.CONFIG), "http://127.0.0.1:18083");
+
+    public static final ConfigKey<String> EMQX_API_KEY = new StringConfigKey(
+            "emqx.apiKey", List.of(KeyType.CONFIG));
+
+    public static final ConfigKey<String> EMQX_API_SECRET = new StringConfigKey(
+            "emqx.apiSecret", List.of(KeyType.CONFIG));
+
+    public static final ConfigKey<String> EMQX_DASHBOARD_USER = new StringConfigKey(
+            "emqx.dashboardUser", List.of(KeyType.CONFIG), "admin");
+
+    public static final ConfigKey<String> EMQX_DASHBOARD_PASSWORD = new StringConfigKey(
+            "emqx.dashboardPassword", List.of(KeyType.CONFIG), "public");
+
+    public static final ConfigKey<String> EMQX_AUTH_ID = new StringConfigKey(
+            "emqx.authId", List.of(KeyType.CONFIG), "password_based:built_in_database");
+
     /**
      * Network interface for the protocol. If not specified, the server will bind to all interfaces. Multiple addresses
      * (for example, one IPv4 and one IPv6) can be supplied as a comma-separated list.
