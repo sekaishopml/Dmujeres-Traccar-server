@@ -23,7 +23,7 @@ public final class MobileEnvelopeValidator {
 
     private static final Pattern MESSAGE_ID_PATTERN = Pattern.compile("[A-Za-z0-9_-]{16,64}");
     private static final Pattern DEVICE_ID_PATTERN = Pattern.compile("[A-Za-z0-9._-]{1,128}");
-    private static final long MAX_FUTURE_SECONDS = 300;
+    private static final long MAX_FUTURE_SECONDS = 86400; // 24h: tolerancia reloj de dispositivos
     private static final long MAX_AGE_DAYS = 7;
 
     private MobileEnvelopeValidator() {
