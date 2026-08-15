@@ -32,7 +32,8 @@ public final class MobileEnvelopeValidator {
     public static void validate(MobileEnvelope envelope, String topicDeviceId, Instant now) {
         require(envelope != null, "envelope is required");
         require(envelope.getSchema() == 1, "unsupported schema");
-        require("position".equals(envelope.getType()), "unsupported type");
+        require("position".equals(envelope.getType()) || "presence".equals(envelope.getType()),
+                "unsupported type");
         require(envelope.getMessageId() != null
                 && MESSAGE_ID_PATTERN.matcher(envelope.getMessageId()).matches(), "invalid messageId");
         require(envelope.getDeviceId() != null
@@ -41,7 +42,6 @@ public final class MobileEnvelopeValidator {
         require(envelope.getSequence() > 0, "sequence must be positive");
         require(envelope.getSentAt() != null, "sentAt is required");
         require(envelope.getObservedAt() != null, "observedAt is required");
-        require(envelope.getPayload() != null, "payload is required");
 
         Instant observedAt;
         Instant sentAt;
@@ -55,6 +55,11 @@ public final class MobileEnvelopeValidator {
         Instant newest = now.plus(MAX_FUTURE_SECONDS, ChronoUnit.SECONDS);
         require(!observedAt.isBefore(oldest), "observedAt is expired");
         require(!sentAt.isAfter(newest), "sentAt is in the future");
+
+        if ("presence".equals(envelope.getType())) {
+            return;
+        }
+        require(envelope.getPayload() != null, "payload is required");
 
         MobileEnvelope.Payload payload = envelope.getPayload();
         require(Double.isFinite(payload.getLatitude())

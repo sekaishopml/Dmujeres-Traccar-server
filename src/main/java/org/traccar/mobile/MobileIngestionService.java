@@ -92,6 +92,19 @@ public class MobileIngestionService {
                 return CompletableFuture.completedFuture(new Result(AckStatus.PENDING, captured));
             }
 
+            if ("presence".equals(captured.getType())) {
+                // Heartbeat: el dispositivo está conectado pero sin fix de GPS (parking interior).
+                // Se mantiene ONLINE sin persistir una posición ficticia.
+                try {
+                    messages.completeWithoutPosition(message);
+                    connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
+                    return CompletableFuture.completedFuture(new Result(AckStatus.ACCEPTED, captured));
+                } catch (Exception error) {
+                    LOGGER.warn("Failed to finalize presence heartbeat", error);
+                    return CompletableFuture.completedFuture(new Result(AckStatus.PENDING, captured));
+                }
+            }
+
             Position position = toPosition(captured, device.getId());
             String cacheKey = "mobile:" + captured.getMessageId();
             cacheManager.addDevice(device.getId(), cacheKey);
