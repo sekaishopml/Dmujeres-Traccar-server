@@ -5,6 +5,7 @@
  */
 package org.traccar.mobile;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -21,6 +22,10 @@ import org.traccar.model.MobileMessage;
 import org.traccar.model.Position;
 import org.traccar.session.ConnectionManager;
 import org.traccar.session.cache.CacheManager;
+import org.traccar.storage.Storage;
+import org.traccar.storage.query.Columns;
+import org.traccar.storage.query.Condition;
+import org.traccar.storage.query.Request;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -51,11 +56,13 @@ public class MobileIngestionService {
     private final PositionPipeline pipeline;
     private final CacheManager cacheManager;
     private final ConnectionManager connectionManager;
+    private final Storage storage;
 
     @Inject
     public MobileIngestionService(Config config, ObjectMapper mapper, DeviceLookupService devices,
             MobileMessageStore messages, MobileAtomicPersistence atomic,
-            PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager) {
+            PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager,
+            Storage storage) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -64,6 +71,7 @@ public class MobileIngestionService {
         this.pipeline = pipeline;
         this.cacheManager = cacheManager;
         this.connectionManager = connectionManager;
+        this.storage = storage;
     }
 
     public CompletionStage<Result> process(byte[] payload, String topicDeviceId) {
@@ -71,6 +79,7 @@ public class MobileIngestionService {
         try {
             envelope = mapper.readValue(payload, MobileEnvelope.class);
             final MobileEnvelope captured = envelope;
+            final JsonNode root = mapper.readTree(payload);
             MobileEnvelopeValidator.validate(captured, topicDeviceId, Instant.now());
             Device device = devices.lookup(new String[] {topicDeviceId});
             if (device == null) {
@@ -97,6 +106,7 @@ public class MobileIngestionService {
                 // Se mantiene ONLINE sin persistir una posición ficticia.
                 try {
                     messages.completeWithoutPosition(message);
+                    applyTelemetry(device, root);
                     connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                     return CompletableFuture.completedFuture(new Result(AckStatus.ACCEPTED, captured));
                 } catch (Exception error) {
@@ -131,6 +141,11 @@ public class MobileIngestionService {
                         if (result2.persisted()) {
                             // El dispositivo queda ONLINE en el panel (con hora actual);
                             // el sweep de tiempo de espera lo pasa a desconocido/offline.
+                            try {
+                                applyTelemetry(device, root);
+                            } catch (Exception telemetryError) {
+                                LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
+                            }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             return new Result(AckStatus.ACCEPTED, captured);
                         }
@@ -158,6 +173,37 @@ public class MobileIngestionService {
             }
             return CompletableFuture.completedFuture(new Result(AckStatus.INVALID, null));
         }
+    }
+
+    /** Actualiza atributos de telemetría del dispositivo sin borrar los existentes. */
+    private void applyTelemetry(Device device, JsonNode root) throws Exception {
+        if (root == null || !root.hasNonNull("payload")) {
+            return;
+        }
+        JsonNode telemetry = root.path("payload");
+        if (telemetry.hasNonNull("pending")) {
+            device.getAttributes().put("mobile.pending", telemetry.get("pending").asLong());
+        }
+        if (telemetry.hasNonNull("battery")) {
+            device.getAttributes().put("mobile.battery", telemetry.get("battery").asInt());
+        }
+        if (telemetry.hasNonNull("network")) {
+            device.getAttributes().put("mobile.network", telemetry.get("network").asText());
+        }
+        if (telemetry.hasNonNull("vendor")) {
+            device.getAttributes().put("mobile.vendor", telemetry.get("vendor").asText());
+        }
+        if (telemetry.hasNonNull("model")) {
+            device.getAttributes().put("mobile.model", telemetry.get("model").asText());
+        }
+        if (telemetry.hasNonNull("appVersion")) {
+            device.getAttributes().put("mobile.appVersion", telemetry.get("appVersion").asText());
+        }
+        if (telemetry.hasNonNull("gps")) {
+            device.getAttributes().put("mobile.gps", telemetry.get("gps").asText());
+        }
+        storage.updateObject(device, new Request(
+                new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
     }
 
     public static Position toPosition(MobileEnvelope envelope, long deviceId) {

@@ -167,7 +167,7 @@ public class MobileProvisionResource extends BaseResource {
         private String password;
         private String name;
         private int intervalSeconds = 10;
-        private int bufferMax = 500;
+        private int bufferMax = 5000;
 
         public String getUsername() {
             return username;

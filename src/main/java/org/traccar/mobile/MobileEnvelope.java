@@ -15,6 +15,9 @@
  */
 package org.traccar.mobile;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class MobileEnvelope {
 
     private int schema;
@@ -90,6 +93,7 @@ public class MobileEnvelope {
         this.payload = payload;
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Payload {
 
         private double latitude;
