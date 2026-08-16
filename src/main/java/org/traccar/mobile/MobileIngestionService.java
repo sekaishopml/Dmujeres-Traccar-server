@@ -123,6 +123,13 @@ public class MobileIngestionService {
             }
 
             Position position = toPosition(captured, device.getId());
+            JsonNode positionTelemetry = root.path("payload");
+            if (positionTelemetry.hasNonNull("battery")) {
+                position.set("batteryLevel", positionTelemetry.get("battery").asInt());
+            }
+            if (positionTelemetry.hasNonNull("network")) {
+                position.set("network", positionTelemetry.get("network").asText());
+            }
             String cacheKey = "mobile:" + captured.getMessageId();
             cacheManager.addDevice(device.getId(), cacheKey);
             PositionPersistenceHandler atomicHandler = new PositionPersistenceHandler() {
