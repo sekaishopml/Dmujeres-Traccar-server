@@ -6,6 +6,7 @@
 package org.traccar.mobile;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.json.JSONArray;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -102,12 +103,18 @@ public class MobileIngestionService {
             }
 
             if ("presence".equals(captured.getType())) {
-                // Heartbeat: el dispositivo está conectado pero sin fix de GPS (parking interior).
-                // Se mantiene ONLINE sin persistir una posición ficticia.
+                // Heartbeat o señal de inicio/fin de jornada: cambia el estado en tiempo real
+                // y actualiza telemetría SIN persistir posiciones ficticias.
                 try {
                     messages.completeWithoutPosition(message);
                     applyTelemetry(device, root);
-                    connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
+                    JsonNode presence = root.path("payload");
+                    boolean ended = presence.hasNonNull("journeyEnded")
+                            && presence.get("journeyEnded").asBoolean();
+                    connectionManager.updateDevice(device.getId(),
+                            ended ? Device.STATUS_OFFLINE : Device.STATUS_ONLINE, new Date());
+                    // Empuja el dispositivo completo con atributos actualizados (batería, historial).
+                    connectionManager.updateDevice(true, device);
                     return CompletableFuture.completedFuture(new Result(AckStatus.ACCEPTED, captured));
                 } catch (Exception error) {
                     LOGGER.warn("Failed to finalize presence heartbeat", error);
@@ -147,6 +154,7 @@ public class MobileIngestionService {
                                 LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
                             }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
+                            connectionManager.updateDevice(true, device);
                             return new Result(AckStatus.ACCEPTED, captured);
                         }
                         if (result2.filtered()) {
@@ -185,7 +193,34 @@ public class MobileIngestionService {
             device.getAttributes().put("mobile.pending", telemetry.get("pending").asLong());
         }
         if (telemetry.hasNonNull("battery")) {
-            device.getAttributes().put("mobile.battery", telemetry.get("battery").asInt());
+            int battery = telemetry.get("battery").asInt();
+            device.getAttributes().put("mobile.battery", battery);
+            Object existing = device.getAttributes().get("mobile.batteryHistory");
+            JSONArray history;
+            if (existing instanceof String && !((String) existing).isBlank()) {
+                try {
+                    history = new JSONArray((String) existing);
+                } catch (Exception error) {
+                    history = new JSONArray();
+                }
+            } else {
+                history = new JSONArray();
+            }
+            long nowSeconds = System.currentTimeMillis() / 1000;
+            if (history.length() > 0) {
+                JSONArray last = history.optJSONArray(history.length() - 1);
+                if (last != null && nowSeconds - last.optLong(0) < 60) {
+                    history.remove(history.length() - 1);
+                }
+            }
+            JSONArray sample = new JSONArray();
+            sample.put(nowSeconds);
+            sample.put(battery);
+            history.put(sample);
+            while (history.length() > 100) {
+                history.remove(0);
+            }
+            device.getAttributes().put("mobile.batteryHistory", history.toString());
         }
         if (telemetry.hasNonNull("network")) {
             device.getAttributes().put("mobile.network", telemetry.get("network").asText());
