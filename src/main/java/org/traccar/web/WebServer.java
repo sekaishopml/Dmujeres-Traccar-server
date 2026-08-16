@@ -171,6 +171,24 @@ public class WebServer implements LifecycleObject {
         filterHolder.setInitParameter("overridePath", overrideReal.toString());
         servletHandler.addFilter(filterHolder, "/*", EnumSet.of(DispatcherType.REQUEST));
 
+        // Fallback SPA: rutas sin extensión (p. ej. /replay) sirven index.html.
+        servletHandler.addFilter((request, response, chain) -> {
+            HttpServletRequest httpRequest = (HttpServletRequest) request;
+            String method = httpRequest.getMethod();
+            String uri = httpRequest.getRequestURI();
+            boolean spaRoute = ("GET".equals(method) || "HEAD".equals(method))
+                    && !uri.startsWith("/api")
+                    && !uri.startsWith("/override")
+                    && !uri.startsWith("/client-proxy")
+                    && !uri.startsWith("/console")
+                    && !uri.contains(".");
+            if (spaRoute) {
+                request.getRequestDispatcher("/index.html").forward(request, response);
+                return;
+            }
+            chain.doFilter(request, response);
+        }, "/*", EnumSet.of(DispatcherType.REQUEST));
+
         servletHandler.setWelcomeFiles(new String[] {"index.html"});
     }
 
