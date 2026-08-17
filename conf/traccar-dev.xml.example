@@ -12,7 +12,7 @@
   <entry key="config.useEnvironmentVariables">true</entry>
 
   <!-- Web / API / Dashboard (dev: bind localhost; en VPS abrir por firewall si hace falta) -->
-  <entry key="web.address">127.0.0.1</entry>
+  <entry key="web.address">0.0.0.0</entry>
   <entry key="web.port">8082</entry>
   <entry key="web.path">../dashboard/build</entry>
   <entry key="web.sessionTimeout">604800</entry>
