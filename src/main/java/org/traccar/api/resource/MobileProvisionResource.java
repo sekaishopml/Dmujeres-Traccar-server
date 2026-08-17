@@ -67,12 +67,18 @@ public class MobileProvisionResource extends BaseResource {
             device.setUniqueId(request.getUsername());
             device.getAttributes().put("mobile.intervalSeconds", request.getIntervalSeconds());
             device.getAttributes().put("mobile.bufferMax", request.getBufferMax());
+            device.getAttributes().put("mobile.bufferPolicy", request.getBufferPolicy());
+            device.getAttributes().put("mobile.ackTimeoutSeconds", request.getAckTimeoutSeconds());
+            device.getAttributes().put("mobile.maxRetries", request.getMaxRetries());
             device.setId(storage.addObject(device, new Request(new Columns.Exclude("id"))));
             storage.addPermission(new Permission(User.class, getUserId(), Device.class, device.getId()));
             created = true;
         } else {
             device.getAttributes().put("mobile.intervalSeconds", request.getIntervalSeconds());
             device.getAttributes().put("mobile.bufferMax", request.getBufferMax());
+            device.getAttributes().put("mobile.bufferPolicy", request.getBufferPolicy());
+            device.getAttributes().put("mobile.ackTimeoutSeconds", request.getAckTimeoutSeconds());
+            device.getAttributes().put("mobile.maxRetries", request.getMaxRetries());
             storage.updateObject(device, new Request(
                     new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
         }
@@ -88,7 +94,9 @@ public class MobileProvisionResource extends BaseResource {
 
         return Response.status(created ? Response.Status.CREATED : Response.Status.OK)
                 .entity(new ProvisionResponse(device.getId(), request.getUsername(),
-                        request.getIntervalSeconds(), request.getBufferMax())).build();
+                        request.getIntervalSeconds(), request.getBufferMax(),
+                        request.getBufferPolicy(), request.getAckTimeoutSeconds(),
+                        request.getMaxRetries())).build();
     }
 
     private void validate(ProvisionRequest request) {
@@ -104,6 +112,16 @@ public class MobileProvisionResource extends BaseResource {
         }
         if (request.getBufferMax() < 10 || request.getBufferMax() > 5000) {
             throw new IllegalArgumentException("bufferMax must be between 10 and 5000");
+        }
+        if (!"drop_oldest".equals(request.getBufferPolicy())
+                && !"stop_capture".equals(request.getBufferPolicy())) {
+            throw new IllegalArgumentException("bufferPolicy must be drop_oldest or stop_capture");
+        }
+        if (request.getAckTimeoutSeconds() < 5 || request.getAckTimeoutSeconds() > 60) {
+            throw new IllegalArgumentException("ackTimeoutSeconds must be between 5 and 60");
+        }
+        if (request.getMaxRetries() < 3 || request.getMaxRetries() > 200) {
+            throw new IllegalArgumentException("maxRetries must be between 3 and 200");
         }
     }
 
@@ -168,6 +186,9 @@ public class MobileProvisionResource extends BaseResource {
         private String name;
         private int intervalSeconds = 10;
         private int bufferMax = 5000;
+        private String bufferPolicy = "drop_oldest";
+        private int ackTimeoutSeconds = 15;
+        private int maxRetries = 30;
 
         public String getUsername() {
             return username;
@@ -208,9 +229,34 @@ public class MobileProvisionResource extends BaseResource {
         public void setBufferMax(int bufferMax) {
             this.bufferMax = bufferMax;
         }
+
+        public String getBufferPolicy() {
+            return bufferPolicy;
+        }
+
+        public void setBufferPolicy(String bufferPolicy) {
+            this.bufferPolicy = bufferPolicy;
+        }
+
+        public int getAckTimeoutSeconds() {
+            return ackTimeoutSeconds;
+        }
+
+        public void setAckTimeoutSeconds(int ackTimeoutSeconds) {
+            this.ackTimeoutSeconds = ackTimeoutSeconds;
+        }
+
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+        }
     }
 
-    public record ProvisionResponse(long deviceId, String username, int intervalSeconds, int bufferMax) {}
+    public record ProvisionResponse(long deviceId, String username, int intervalSeconds, int bufferMax,
+            String bufferPolicy, int ackTimeoutSeconds, int maxRetries) {}
 
     private record MqttUser(String user_id, String password, boolean is_superuser) {}
 
