@@ -76,6 +76,7 @@ public class Event extends Message {
     public static final String TYPE_MOBILE_GPS_REENABLED = "mobileGpsReenabled";
     public static final String TYPE_MOBILE_NETWORK_LOST = "mobileNetworkLost";
     public static final String TYPE_MOBILE_NETWORK_RESTORED = "mobileNetworkRestored";
+    public static final String TYPE_MOBILE_WIFI_LOST = "mobileWifiLost";
     public static final String TYPE_MOBILE_BATTERY_CRITICAL = "mobileBatteryCritical";
     public static final String TYPE_MOBILE_POSSIBLE_POWER_OFF = "mobilePossiblePowerOff";
 

@@ -61,15 +61,15 @@ public final class MobileTelemetryMonitor {
             }
         }
 
-        // Red on/off
+        // Red: pérdida total, pérdida de WiFi, restauración
         if (before.network != null && netNew != null && !before.network.equals(netNew)) {
             if ("none".equals(netNew)) {
                 events.add(warningEvent(Event.TYPE_MOBILE_NETWORK_LOST, deviceId, batteryNew, gpsNew, netNew));
-            } else if (!"none".equals(before.network) || "none".equals(before.network)) {
-                // Solo registrar restauración si antes había red y ahora no, o viceversa
-                if (!"none".equals(netNew) && "none".equals(before.network)) {
-                    events.add(infoEvent(Event.TYPE_MOBILE_NETWORK_RESTORED, deviceId, batteryNew, gpsNew, netNew));
-                }
+            } else if ("wifi".equals(before.network) && !"wifi".equals(netNew)) {
+                // WiFi apagado o perdido (pasa a mobile o none)
+                events.add(warningEvent(Event.TYPE_MOBILE_WIFI_LOST, deviceId, batteryNew, gpsNew, netNew));
+            } else if (!"none".equals(netNew) && "none".equals(before.network)) {
+                events.add(infoEvent(Event.TYPE_MOBILE_NETWORK_RESTORED, deviceId, batteryNew, gpsNew, netNew));
             }
         }
 
