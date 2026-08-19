@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
 import org.traccar.database.DeviceLookupService;
+import org.traccar.database.NotificationManager;
 import org.traccar.handler.PositionPersistenceHandler;
 import org.traccar.handler.PositionPipeline;
 import org.traccar.helper.UnitsConverter;
@@ -65,12 +66,13 @@ public class MobileIngestionService {
     private final CacheManager cacheManager;
     private final ConnectionManager connectionManager;
     private final Storage storage;
+    private final NotificationManager notificationManager;
 
     @Inject
     public MobileIngestionService(Config config, ObjectMapper mapper, DeviceLookupService devices,
             MobileMessageStore messages, MobileAtomicPersistence atomic,
             PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager,
-            Storage storage) {
+            Storage storage, NotificationManager notificationManager) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -80,6 +82,7 @@ public class MobileIngestionService {
         this.cacheManager = cacheManager;
         this.connectionManager = connectionManager;
         this.storage = storage;
+        this.notificationManager = notificationManager;
     }
 
     public CompletionStage<Result> process(byte[] payload, String topicDeviceId) {
@@ -114,14 +117,25 @@ public class MobileIngestionService {
                 // y actualiza telemetría SIN persistir posiciones ficticias.
                 try {
                     messages.completeWithoutPosition(message);
+                    MobileTelemetryMonitor.TelemetrySnapshot before =
+                            MobileTelemetryMonitor.capture(device);
                     applyTelemetry(device, root);
                     JsonNode presence = root.path("payload");
                     boolean ended = presence.hasNonNull("journeyEnded")
                             && presence.get("journeyEnded").asBoolean();
                     connectionManager.updateDevice(device.getId(),
                             ended ? Device.STATUS_OFFLINE : Device.STATUS_ONLINE, new Date());
-                    // Empuja el dispositivo completo con atributos actualizados (batería, historial).
                     connectionManager.updateDevice(true, device);
+                    // Detectar cambios de telemetría y crear eventos (GPS off, red, batería).
+                    try {
+                        var events = MobileTelemetryMonitor.detectChanges(device, before, root);
+                        for (var event : events) {
+                            notificationManager.updateEvents(
+                                    java.util.Collections.singletonMap(event, null));
+                        }
+                    } catch (Exception eventsError) {
+                        LOGGER.warn("Failed to detect telemetry events", eventsError);
+                    }
                     return CompletableFuture.completedFuture(new Result(AckStatus.ACCEPTED, captured));
                 } catch (Exception error) {
                     LOGGER.warn("Failed to finalize presence heartbeat", error);

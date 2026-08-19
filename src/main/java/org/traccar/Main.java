@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.traccar.broadcast.BroadcastService;
 import org.traccar.mobile.MobileMqttConsumer;
+import org.traccar.mobile.MobileSilenceMonitor;
 import org.traccar.schedule.ScheduleManager;
 import org.traccar.storage.DatabaseModule;
 import org.traccar.web.WebModule;
@@ -122,7 +123,7 @@ public final class Main {
             var services = new ArrayList<LifecycleObject>();
             for (var clazz : List.of(
                      ScheduleManager.class, ServerManager.class, WebServer.class, BroadcastService.class,
-                     MobileMqttConsumer.class)) {
+                     MobileMqttConsumer.class, MobileSilenceMonitor.class)) {
                 var service = injector.getInstance(clazz);
                 if (service != null) {
                     service.start();

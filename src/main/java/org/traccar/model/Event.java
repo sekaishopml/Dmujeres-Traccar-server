@@ -70,6 +70,15 @@ public class Event extends Message {
     public static final String TYPE_DRIVER_CHANGED = "driverChanged";
     public static final String TYPE_MEDIA = "media";
 
+    public static final String TYPE_MOBILE_JOURNEY_STARTED = "mobileJourneyStarted";
+    public static final String TYPE_MOBILE_JOURNEY_ENDED = "mobileJourneyEnded";
+    public static final String TYPE_MOBILE_GPS_DISABLED = "mobileGpsDisabled";
+    public static final String TYPE_MOBILE_GPS_REENABLED = "mobileGpsReenabled";
+    public static final String TYPE_MOBILE_NETWORK_LOST = "mobileNetworkLost";
+    public static final String TYPE_MOBILE_NETWORK_RESTORED = "mobileNetworkRestored";
+    public static final String TYPE_MOBILE_BATTERY_CRITICAL = "mobileBatteryCritical";
+    public static final String TYPE_MOBILE_POSSIBLE_POWER_OFF = "mobilePossiblePowerOff";
+
     private Date eventTime;
 
     public Date getEventTime() {
