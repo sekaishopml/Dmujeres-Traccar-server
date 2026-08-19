@@ -39,6 +39,7 @@ import org.traccar.storage.query.Columns;
 import org.traccar.storage.query.Request;
 
 import jakarta.annotation.Nullable;
+import com.google.inject.Provider;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import java.util.Arrays;
@@ -57,6 +58,7 @@ public class NotificationManager {
     private final EventForwarder eventForwarder;
     private final NotificatorManager notificatorManager;
     private final Geocoder geocoder;
+    private final Provider<org.traccar.session.ConnectionManager> connectionManagerProvider;
 
     private final boolean geocodeOnRequest;
     private final long timeThreshold;
@@ -65,12 +67,14 @@ public class NotificationManager {
     @Inject
     public NotificationManager(
             Config config, Storage storage, CacheManager cacheManager, @Nullable EventForwarder eventForwarder,
-            NotificatorManager notificatorManager, @Nullable Geocoder geocoder) {
+            NotificatorManager notificatorManager, @Nullable Geocoder geocoder,
+            Provider<org.traccar.session.ConnectionManager> connectionManagerProvider) {
         this.storage = storage;
         this.cacheManager = cacheManager;
         this.eventForwarder = eventForwarder;
         this.notificatorManager = notificatorManager;
         this.geocoder = geocoder;
+        this.connectionManagerProvider = connectionManagerProvider;
         geocodeOnRequest = config.getBoolean(Keys.GEOCODER_ON_REQUEST);
         timeThreshold = config.getLong(Keys.NOTIFICATOR_TIME_THRESHOLD);
         String blockedUsersString = config.getString(Keys.NOTIFICATION_BLOCK_USERS);
@@ -89,6 +93,13 @@ public class NotificationManager {
         }
 
         forwardEvent(event, position);
+
+        // Empuja el evento a todos los clientes WebSocket conectados.
+        try {
+            connectionManagerProvider.get().broadcastEvent(event);
+        } catch (Exception error) {
+            LOGGER.warn("Failed to broadcast event to WebSocket", error);
+        }
 
         if (System.currentTimeMillis() - event.getEventTime().getTime() > timeThreshold) {
             LOGGER.info("Skipping notifications for old event");

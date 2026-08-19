@@ -342,6 +342,20 @@ public class ConnectionManager implements BroadcastInterface {
         }
     }
 
+    /**
+     * Empuja un evento a TODOS los usuarios conectados que tengan permiso sobre
+     * el dispositivo del evento. Se usa para eventos que el servidor genera
+     * proactivamente (anti-trampa, silencio, etc.).
+     */
+    public synchronized void broadcastEvent(Event event) {
+        broadcastService.updateEvent(true, 0, event);
+        for (Map.Entry<Long, Set<UpdateListener>> entry : listeners.entrySet()) {
+            for (UpdateListener listener : entry.getValue()) {
+                listener.onUpdateEvent(event);
+            }
+        }
+    }
+
     @Override
     public synchronized <T1 extends BaseModel, T2 extends BaseModel> void invalidatePermission(
             boolean local, Class<T1> clazz1, long id1, Class<T2> clazz2, long id2, boolean link) {
