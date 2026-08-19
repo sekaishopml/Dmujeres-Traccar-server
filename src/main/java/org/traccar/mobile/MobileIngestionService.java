@@ -47,6 +47,13 @@ public class MobileIngestionService {
 
     public enum AckStatus { ACCEPTED, DUPLICATE, REJECTED, INVALID, EXPIRED, PENDING }
 
+    /**
+     * El reloj del dispositivo móvil puede estar desfasado (horas). Si la hora que reporta
+     * se aleja más de este umbral de la hora real del servidor, se usa la hora del servidor
+     * para que las posiciones queden fechadas correctamente y el replay / estado funcionen.
+     */
+    private static final long CLOCK_SKEW_THRESHOLD_MS = 60L * 60L * 1000L;
+
     public record Result(AckStatus status, MobileEnvelope envelope) {}
 
     private final Config config;
@@ -152,9 +159,12 @@ public class MobileIngestionService {
             return pipeline.process(position, pipelineExecutor, atomicHandler)
                     .whenComplete((ignored, error) -> cacheManager.removeDevice(device.getId(), cacheKey))
                     .thenApply(result2 -> {
-                        if (result2.persisted()) {
-                            // El dispositivo queda ONLINE en el panel (con hora actual);
-                            // el sweep de tiempo de espera lo pasa a desconocido/offline.
+                        if (result2.persisted() || result2.filtered()) {
+                            // La telemetría (batería, red, estado) se aplica tanto si la
+                            // posición se guarda como si se filtra por duplicada/cercana:
+                            // si el dispositivo está quieto manda posiciones casi idénticas
+                            // que el servidor filtra, y de lo contrario la batería y el
+                            // estado "en línea" se congelarían en el panel.
                             try {
                                 applyTelemetry(device, root);
                             } catch (Exception telemetryError) {
@@ -162,16 +172,13 @@ public class MobileIngestionService {
                             }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             connectionManager.updateDevice(true, device);
-                            return new Result(AckStatus.ACCEPTED, captured);
-                        }
-                        if (result2.filtered()) {
                             try {
                                 messages.completeWithoutPosition(message);
-                                return new Result(AckStatus.ACCEPTED, captured);
                             } catch (Exception completionError) {
                                 LOGGER.error("Failed to finalize filtered mobile message", completionError);
                                 return new Result(AckStatus.PENDING, captured);
                             }
+                            return new Result(AckStatus.ACCEPTED, captured);
                         }
                         return new Result(AckStatus.PENDING, captured);
                     })
@@ -245,14 +252,14 @@ public class MobileIngestionService {
             device.getAttributes().put("mobile.gps", telemetry.get("gps").asText());
         }
         storage.updateObject(device, new Request(
-                new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
+                new Columns.All(), new Condition.Equals("id", device.getId())));
     }
 
     public static Position toPosition(MobileEnvelope envelope, long deviceId) {
         MobileEnvelope.Payload value = envelope.getPayload();
         Position position = new Position("dmj-mqtt");
         position.setDeviceId(deviceId);
-        position.setTime(Date.from(Instant.parse(envelope.getObservedAt())));
+        position.setTime(trustedDeviceTime(envelope));
         position.setLatitude(value.getLatitude());
         position.setLongitude(value.getLongitude());
         if (value.getAccuracy() != null) {
@@ -297,6 +304,26 @@ public class MobileIngestionService {
             return result.toString();
         } catch (NoSuchAlgorithmException error) {
             throw new IllegalStateException(error);
+        }
+    }
+
+    /**
+     * Devuelve la hora de la posición confiando en el servidor cuando el reloj del
+     * dispositivo está demasiado desfasado. Así el replay y el estado fuera de línea
+     * usan fechas reales aunque el teléfono tenga la hora equivocada.
+     */
+    private static Date trustedDeviceTime(MobileEnvelope envelope) {
+        try {
+            long reported = Instant.parse(envelope.getObservedAt()).toEpochMilli();
+            long now = System.currentTimeMillis();
+            if (Math.abs(reported - now) > CLOCK_SKEW_THRESHOLD_MS) {
+                LOGGER.warn("Hora del dispositivo desfasada {} ms; se usa la hora del servidor",
+                        reported - now);
+                return new Date();
+            }
+            return new Date(reported);
+        } catch (Exception error) {
+            return new Date();
         }
     }
 }

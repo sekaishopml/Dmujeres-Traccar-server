@@ -5,6 +5,7 @@
  */
 package org.traccar.api.resource;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.security.PermitAll;
 import jakarta.inject.Inject;
@@ -20,7 +21,6 @@ import org.slf4j.LoggerFactory;
 import org.traccar.api.BaseResource;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
-import org.traccar.mobile.MobileEnvelope;
 import org.traccar.mobile.MobileIngestionService;
 import org.traccar.mobile.MobileIngestionService.AckStatus;
 
@@ -63,33 +63,37 @@ public class MobileHttpResource extends BaseResource {
             return Response.status(Response.Status.UNAUTHORIZED).build();
         }
 
-        List<MobileEnvelope> envelopes;
+        List<Ack> acks = new ArrayList<>();
+        JsonNode root;
         try {
-            envelopes = mapper.readValue(
-                    body, mapper.getTypeFactory().constructCollectionType(List.class, MobileEnvelope.class));
+            root = mapper.readTree(body);
         } catch (Exception error) {
             LOGGER.warn("Invalid mobile HTTP batch payload", error);
             return Response.status(Response.Status.BAD_REQUEST).build();
         }
-        if (envelopes.isEmpty()) {
+        if (!root.isArray() || root.isEmpty()) {
             return Response.status(Response.Status.BAD_REQUEST).build();
         }
 
-        List<Ack> acks = new ArrayList<>();
-        for (MobileEnvelope envelope : envelopes) {
-            if (envelope.getDeviceId() == null) {
+        // Se pasan los bytes crudos de cada nodo del JSON (no el envelope re-serializado) para
+        // no perder campos de telemetría como battery/pending/network que MobileEnvelope.Payload
+        // no modela. El canal MQTT ya hace esto con los bytes originales del broker.
+        for (JsonNode node : root) {
+            String deviceId = node.path("deviceId").asText(null);
+            if (deviceId == null) {
                 acks.add(new Ack(null, null, 0, "invalid"));
                 continue;
             }
             try {
-                byte[] payload = mapper.writeValueAsBytes(envelope);
-                AckStatus status = ingestion.process(payload, envelope.getDeviceId())
+                byte[] payload = mapper.writeValueAsBytes(node);
+                AckStatus status = ingestion.process(payload, deviceId)
                         .thenApply(result -> result.status()).toCompletableFuture().join();
-                acks.add(new Ack(envelope.getDeviceId(), envelope.getMessageId(), envelope.getSequence(),
-                        status.name().toLowerCase()));
+                acks.add(new Ack(deviceId, node.path("messageId").asText(null),
+                        node.path("sequence").asLong(0), status.name().toLowerCase()));
             } catch (Exception error) {
                 LOGGER.warn("Mobile HTTP message failed", error);
-                acks.add(new Ack(envelope.getDeviceId(), envelope.getMessageId(), envelope.getSequence(), "error"));
+                acks.add(new Ack(deviceId, node.path("messageId").asText(null),
+                        node.path("sequence").asLong(0), "error"));
             }
         }
 
