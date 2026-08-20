@@ -10,13 +10,10 @@ import org.traccar.model.Device;
 import org.traccar.model.Event;
 import org.traccar.storage.Storage;
 import org.traccar.storage.query.Columns;
-import org.traccar.storage.query.Condition;
 import org.traccar.storage.query.Request;
 
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -24,21 +21,24 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Monitor de silencio: detecta dispositivos móviles con jornada activa que dejaron de
- * comunicarse. Genera un evento "Posible teléfono apagado o sin conexión" después de 5
- * minutos de silencio. Solo crea una vez por episodio (no genera spam).
+ * comunicarse. Según el último estado de red conocido, crea:
+ * - mobileNetworkLost: si la última red fue wifi o mobile (el teléfono perdió conexión)
+ * - mobilePossiblePowerOff: si la última red era none o no hay datos (teléfono apagado)
+ *
+ * Threshold: 2 minutos (el teléfono no puede avisar que se quedó sin red,
+ * así que el servidor lo detecta por silencio).
  */
 @Singleton
 public class MobileSilenceMonitor implements LifecycleObject {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MobileSilenceMonitor.class);
-    private static final long SILENCE_THRESHOLD_MS = 5 * 60_000L;
-    private static final long COOLDOWN_MS = 30 * 60_000L;
+    private static final long SILENCE_THRESHOLD_MS = 2 * 60_000L;
+    private static final long COOLDOWN_MS = 15 * 60_000L;
 
     private final Storage storage;
     private final NotificationManager notificationManager;
     private ScheduledExecutorService scheduler;
 
-    /** Último evento creado por dispositivo para evitar spam. */
     private final ConcurrentHashMap<Long, Long> lastEventByDevice = new ConcurrentHashMap<>();
 
     @Inject
@@ -54,8 +54,9 @@ public class MobileSilenceMonitor implements LifecycleObject {
             t.setDaemon(true);
             return t;
         });
-        scheduler.scheduleAtFixedRate(this::check, 60, 60, TimeUnit.SECONDS);
-        LOGGER.info("Mobile silence monitor started");
+        scheduler.scheduleAtFixedRate(this::check, 30, 30, TimeUnit.SECONDS);
+        LOGGER.info("Mobile silence monitor started (threshold={}s, cooldown={}s)",
+                SILENCE_THRESHOLD_MS / 1000, COOLDOWN_MS / 1000);
     }
 
     @Override
@@ -73,7 +74,6 @@ public class MobileSilenceMonitor implements LifecycleObject {
             for (Device device : devices) {
                 if (device.getLastUpdate() == null) continue;
 
-                // Solo dispositivos con jornada activa (journeyId en atributos vía telemetry)
                 Object journeyIdObj = device.getAttributes().get("mobile.journeyId");
                 if (journeyIdObj == null) continue;
                 long journeyId = 0L;
@@ -87,36 +87,48 @@ public class MobileSilenceMonitor implements LifecycleObject {
                 long lastUpdateMs = device.getLastUpdate().getTime();
                 if (now - lastUpdateMs < SILENCE_THRESHOLD_MS) continue;
 
-                // Cooldown: no crear el mismo tipo de evento en los últimos 30 minutos
                 Long lastEvent = lastEventByDevice.get(device.getId());
                 if (lastEvent != null && now - lastEvent < COOLDOWN_MS) continue;
 
-                // Determinar severidad según última batería conocida
-                int battery = -1;
-                Object batObj = device.getAttributes().get("mobile.battery");
-                if (batObj instanceof Number) battery = ((Number) batObj).intValue();
-                else try { battery = Integer.parseInt(batObj.toString()); } catch (Exception ignored) {}
+                int battery = intAttr(device, "mobile.battery");
+                String gps = strAttr(device, "mobile.gps");
+                String network = strAttr(device, "mobile.network");
 
-                Event event = new Event(Event.TYPE_MOBILE_POSSIBLE_POWER_OFF, device.getId());
+                // Determinar tipo de evento según la última red conocida:
+                // - Si la última red fue wifi o mobile → el teléfono tenía conexión y la perdió
+                // - Si la última red era none o no hay datos → posible apagado o sin señal desde hace rato
+                String eventType;
+                if (network != null && !"none".equals(network)) {
+                    eventType = Event.TYPE_MOBILE_NETWORK_LOST;
+                } else {
+                    eventType = Event.TYPE_MOBILE_POSSIBLE_POWER_OFF;
+                }
+
+                Event event = new Event(eventType, device.getId());
                 event.getAttributes().put("mobileSeverity", "warning");
                 event.getAttributes().put("lastBattery", battery);
                 event.getAttributes().put("silenceMinutes", (now - lastUpdateMs) / 60_000);
-                String gps = null;
-                Object gpsObj = device.getAttributes().get("mobile.gps");
-                if (gpsObj != null) gps = gpsObj.toString();
                 if (gps != null) event.getAttributes().put("gps", gps);
-                String network = null;
-                Object netObj = device.getAttributes().get("mobile.network");
-                if (netObj != null) network = netObj.toString();
                 if (network != null) event.getAttributes().put("network", network);
 
-                notificationManager.updateEvents(java.util.Collections.singletonMap(event, null));
+                notificationManager.updateEvents(Collections.singletonMap(event, null));
                 lastEventByDevice.put(device.getId(), now);
-                LOGGER.info("Silence event created for device {} ({} min, battery {}%)",
-                        device.getUniqueId(), (now - lastUpdateMs) / 60_000, battery);
+                LOGGER.info("Silence event created for device {} type={} ({} min, battery={}%, network={})",
+                        device.getUniqueId(), eventType, (now - lastUpdateMs) / 60_000, battery, network);
             }
         } catch (Exception error) {
             LOGGER.warn("Mobile silence monitor check failed", error);
         }
+    }
+
+    private static String strAttr(Device device, String key) {
+        Object v = device.getAttributes().get(key);
+        return v != null ? v.toString() : null;
+    }
+
+    private static int intAttr(Device device, String key) {
+        Object v = device.getAttributes().get(key);
+        if (v instanceof Number) return ((Number) v).intValue();
+        try { return Integer.parseInt(v.toString()); } catch (Exception e) { return -1; }
     }
 }
