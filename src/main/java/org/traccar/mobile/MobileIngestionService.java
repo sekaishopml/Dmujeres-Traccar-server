@@ -67,12 +67,14 @@ public class MobileIngestionService {
     private final ConnectionManager connectionManager;
     private final Storage storage;
     private final NotificationManager notificationManager;
+    private final MobileJourneyRegistry journeyRegistry;
 
     @Inject
     public MobileIngestionService(Config config, ObjectMapper mapper, DeviceLookupService devices,
             MobileMessageStore messages, MobileAtomicPersistence atomic,
             PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager,
-            Storage storage, NotificationManager notificationManager) {
+            Storage storage, NotificationManager notificationManager,
+            MobileJourneyRegistry journeyRegistry) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -83,6 +85,7 @@ public class MobileIngestionService {
         this.connectionManager = connectionManager;
         this.storage = storage;
         this.notificationManager = notificationManager;
+        this.journeyRegistry = journeyRegistry;
     }
 
     public CompletionStage<Result> process(byte[] payload, String topicDeviceId) {
@@ -121,8 +124,18 @@ public class MobileIngestionService {
                             MobileTelemetryMonitor.capture(device);
                     applyTelemetry(device, root);
                     JsonNode presence = root.path("payload");
+                    boolean started = presence.hasNonNull("journeyStarted")
+                            && presence.get("journeyStarted").asBoolean();
                     boolean ended = presence.hasNonNull("journeyEnded")
                             && presence.get("journeyEnded").asBoolean();
+                    if (ended) {
+                        journeyRegistry.end(device.getId());
+                        device.getAttributes().put("mobile.journeyId", 0L);
+                    } else if (started) {
+                        long journeyId = presence.hasNonNull("journeyId")
+                                ? presence.get("journeyId").asLong() : 0L;
+                        journeyRegistry.start(device.getId(), journeyId);
+                    }
                     connectionManager.updateDevice(device.getId(),
                             ended ? Device.STATUS_OFFLINE : Device.STATUS_ONLINE, new Date());
                     connectionManager.updateDevice(true, device);
@@ -183,6 +196,11 @@ public class MobileIngestionService {
                                 applyTelemetry(device, root);
                             } catch (Exception telemetryError) {
                                 LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
+                            }
+                            JsonNode telemetryPayload = root.path("payload");
+                            if (telemetryPayload.hasNonNull("journeyId")) {
+                                journeyRegistry.start(device.getId(),
+                                        telemetryPayload.get("journeyId").asLong());
                             }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             connectionManager.updateDevice(true, device);
@@ -265,8 +283,11 @@ public class MobileIngestionService {
         if (telemetry.hasNonNull("gps")) {
             device.getAttributes().put("mobile.gps", telemetry.get("gps").asText());
         }
+        if (telemetry.hasNonNull("journeyId")) {
+            device.getAttributes().put("mobile.journeyId", telemetry.get("journeyId").asLong());
+        }
         storage.updateObject(device, new Request(
-                new Columns.All(), new Condition.Equals("id", device.getId())));
+                new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
     }
 
     public static Position toPosition(MobileEnvelope envelope, long deviceId) {
