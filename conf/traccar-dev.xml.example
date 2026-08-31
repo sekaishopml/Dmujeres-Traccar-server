@@ -28,6 +28,11 @@
   <!-- Realtime: eventos de estado de conexión de dispositivos -->
   <entry key="event.status.enable">true</entry>
 
+  <!-- Filtro de calidad: red de seguridad server-side contra posiciones erráticas (GPS loco). -->
+  <entry key="filter.enable">true</entry>
+  <!-- Velocidad implícita máxima entre posiciones consecutivas, en nudos (140 kn ≈ 260 km/h). -->
+  <entry key="filter.maxSpeed">140</entry>
+
   <!-- Logging -->
   <entry key="logger.level">info</entry>
 
