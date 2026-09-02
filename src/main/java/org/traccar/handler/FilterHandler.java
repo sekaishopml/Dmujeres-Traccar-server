@@ -165,6 +165,12 @@ public class FilterHandler extends BasePositionHandler {
 
     protected boolean filter(Position position) {
 
+        // Fase B: bypass filtro para ingesta móvil dmj-mqtt — la app ya filtra isPlausibleFix
+        // y el server no debe re-filtrar por maxSpeed/distance y tirar puntos del replay offline.
+        if ("dmj-mqtt".equals(position.getProtocol())) {
+            return false;
+        }
+
         List<String> filterTypes = new LinkedList<>();
 
         // filter out invalid data

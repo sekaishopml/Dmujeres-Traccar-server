@@ -186,7 +186,24 @@ public class MobileIngestionService {
             return pipeline.process(position, pipelineExecutor, atomicHandler)
                     .whenComplete((ignored, error) -> cacheManager.removeDevice(device.getId(), cacheKey))
                     .thenApply(result2 -> {
-                        if (result2.persisted() || result2.filtered()) {
+                        if (result2.persisted()) {
+                            try {
+                                applyTelemetry(device, root);
+                            } catch (Exception telemetryError) {
+                                LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
+                            }
+                            JsonNode telemetryPayload = root.path("payload");
+                            if (telemetryPayload.hasNonNull("journeyId")) {
+                                journeyRegistry.start(device.getId(),
+                                        telemetryPayload.get("journeyId").asLong());
+                            }
+                            connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
+                            connectionManager.updateDevice(true, device);
+                            // Fase B: ya persistido atómicamente (INSERT tc_positions + UPDATE tc_mobile_messages con positionId)
+                            // no llamar a completeWithoutPosition que pondría positionId=0 y rompería el link.
+                            return new Result(AckStatus.ACCEPTED, captured);
+                        }
+                        if (result2.filtered()) {
                             // La telemetría (batería, red, estado) se aplica tanto si la
                             // posición se guarda como si se filtra por duplicada/cercana:
                             // si el dispositivo está quieto manda posiciones casi idénticas
@@ -294,7 +311,24 @@ public class MobileIngestionService {
         MobileEnvelope.Payload value = envelope.getPayload();
         Position position = new Position("dmj-mqtt");
         position.setDeviceId(deviceId);
-        position.setTime(trustedDeviceTime(envelope));
+        Date fixTime = trustedDeviceTime(envelope);
+        position.setTime(fixTime);
+        // Fase B: clock skew no destructivo — siempre se conserva fixTime real,
+        // y se guarda serverReceivedAt como atributo para auditoría/diagnóstico.
+        // El serverTime del Position ya se inicializa a now() en el constructor,
+        // pero además lo exponemos como atributo serverReceivedAt para que sea
+        // queryable y visible en el replay sin alterar fixTime.
+        long now = System.currentTimeMillis();
+        position.getAttributes().put(Position.KEY_SERVER_RECEIVED_AT, new Date(now));
+        try {
+            long reported = fixTime.getTime();
+            long skew = reported - now;
+            if (Math.abs(skew) > CLOCK_SKEW_THRESHOLD_MS) {
+                // ya logueado en trustedDeviceTime, dejamos marca explícita del skew
+                position.getAttributes().put("deviceTimeSkewMs", skew);
+            }
+        } catch (Exception ignored) {
+        }
         position.setLatitude(value.getLatitude());
         position.setLongitude(value.getLongitude());
         if (value.getAccuracy() != null) {
@@ -343,18 +377,19 @@ public class MobileIngestionService {
     }
 
     /**
-     * Devuelve la hora de la posición confiando en el servidor cuando el reloj del
-     * dispositivo está demasiado desfasado. Así el replay y el estado fuera de línea
-     * usan fechas reales aunque el teléfono tenga la hora equivocada.
+     * Fase B: clock skew no destructivo — siempre conserva la hora del fix (observedAt)
+     * para que el replay offline mantenga el hueco temporal real. Si el reloj del
+     * dispositivo está desfasado >1h, solo loguea warn y guarda serverReceivedAt
+     * como atributo adicional, pero NO sustituye fixTime.
      */
     private static Date trustedDeviceTime(MobileEnvelope envelope) {
         try {
             long reported = Instant.parse(envelope.getObservedAt()).toEpochMilli();
             long now = System.currentTimeMillis();
             if (Math.abs(reported - now) > CLOCK_SKEW_THRESHOLD_MS) {
-                LOGGER.warn("Hora del dispositivo desfasada {} ms; se usa la hora del servidor",
-                        reported - now);
-                return new Date();
+                LOGGER.warn(
+                        "Hora del dispositivo desfasada {} ms; se conserva hora del fix {}, serverReceivedAt={}",
+                        reported - now, new Date(reported), new Date(now));
             }
             return new Date(reported);
         } catch (Exception error) {

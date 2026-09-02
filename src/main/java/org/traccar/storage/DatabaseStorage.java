@@ -375,6 +375,12 @@ public class DatabaseStorage extends Storage {
             if (order.getDescending()) {
                 result.append(" DESC");
             }
+            // Fase B: orden determinístico secundario para replay offline.
+            // Si Request solo permite un Order, aquí añadimos tie-breaker id para
+            // garantizar ORDER BY fixTime, id estable cuando hay colisiones de fixTime.
+            if ("fixTime".equals(order.getColumn())) {
+                result.append(", id");
+            }
             if (order.getLimit() > 0) {
                 if (databaseType.equals("Microsoft SQL Server")) {
                     result.append(" OFFSET ");

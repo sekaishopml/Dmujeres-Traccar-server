@@ -154,6 +154,13 @@ public class PositionPipeline {
         }
 
         BasePositionHandler baseHandler = positionHandlers.get(index);
+        // Fase B: bypass FilterHandler para dmj-mqtt (defensa en profundidad).
+        // La ingesta móvil ya filtra en app (isPlausibleFix) y el server no debe
+        // re-filtrar por maxSpeed/distance; saltamos el handler para no tirar puntos del replay.
+        if (baseHandler instanceof FilterHandler && "dmj-mqtt".equals(position.getProtocol())) {
+            processPosition(position, executor, index + 1, persisted, persistenceOverride, result);
+            return;
+        }
         if (baseHandler instanceof PositionPersistenceHandler) {
             PositionPersistenceHandler persistenceHandler = persistenceOverride != null
                     ? persistenceOverride : (PositionPersistenceHandler) baseHandler;

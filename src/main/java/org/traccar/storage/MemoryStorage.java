@@ -80,7 +80,19 @@ public class MemoryStorage extends Storage {
     private int compareByOrder(Object a, Object b, Order order) {
         int comparison = ((Comparable) retrieveValue(a, order.getColumn()))
                 .compareTo(retrieveValue(b, order.getColumn()));
-        return order.getDescending() ? -comparison : comparison;
+        int result = order.getDescending() ? -comparison : comparison;
+        if (result != 0) {
+            return result;
+        }
+        // Fase B: tie-breaker determinístico para replay offline — ORDER BY fixTime, id
+        if ("fixTime".equals(order.getColumn())) {
+            Comparable idA = (Comparable) retrieveValue(a, "id");
+            Comparable idB = (Comparable) retrieveValue(b, "id");
+            if (idA != null && idB != null) {
+                return idA.compareTo(idB);
+            }
+        }
+        return 0;
     }
 
     private boolean checkCondition(Condition genericCondition, Object object) {

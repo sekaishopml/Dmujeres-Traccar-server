@@ -73,6 +73,13 @@ public final class PositionUtil {
         return Stream.concat(extraStream, positions);
     }
 
+    /**
+     * Fase B: orden determinístico para replay offline — fixTime ASC + id ASC como tie-breaker.
+     * Cuando el batch offline inserta varias posiciones con el mismo fixTime (mismo segundo),
+     * el ORDER BY solo por fixTime es no determinista en Postgres; agregar id garantiza
+     * orden estable para ReplayPage. El secundario se añade en DatabaseStorage.formatOrder
+     * y MemoryStorage.compareByOrder (ver ORDER BY fixTime, id).
+     */
     public static Stream<Position> getPositionsStream(
             Storage storage, long deviceId, Date from, Date to) throws StorageException {
         return storage.getObjectsStream(Position.class, new Request(
