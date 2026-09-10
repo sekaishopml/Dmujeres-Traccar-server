@@ -34,20 +34,25 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private static final Logger LOGGER = LoggerFactory.getLogger(MobileSilenceMonitor.class);
     private static final long SILENCE_THRESHOLD_MS = 2 * 60_000L;
     private static final long COOLDOWN_MS = 15 * 60_000L;
+    /** Jornada activa con mensajes pero sin coordenadas nuevas >= 15 min. */
+    private static final long STALLED_THRESHOLD_MS = 15 * 60_000L;
 
     private final Storage storage;
     private final NotificationManager notificationManager;
     private final MobileJourneyRegistry journeyRegistry;
+    private final MobileQualityFilter qualityFilter;
     private ScheduledExecutorService scheduler;
 
     private final ConcurrentHashMap<Long, Long> lastEventByDevice = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Long> lastStalledByDevice = new ConcurrentHashMap<>();
 
     @Inject
     public MobileSilenceMonitor(Storage storage, NotificationManager notificationManager,
-            MobileJourneyRegistry journeyRegistry) {
+            MobileJourneyRegistry journeyRegistry, MobileQualityFilter qualityFilter) {
         this.storage = storage;
         this.notificationManager = notificationManager;
         this.journeyRegistry = journeyRegistry;
+        this.qualityFilter = qualityFilter;
     }
 
     @Override
@@ -87,7 +92,15 @@ public class MobileSilenceMonitor implements LifecycleObject {
                 if (device == null || device.getLastUpdate() == null) continue;
 
                 long lastUpdateMs = device.getLastUpdate().getTime();
-                if (now - lastUpdateMs < SILENCE_THRESHOLD_MS) continue;
+                if (now - lastUpdateMs < SILENCE_THRESHOLD_MS) {
+                    // Recuperación: si antes se disparó un evento de silencio para este
+                    // dispositivo y ya volvieron los datos frescos, limpiar la degradación.
+                    if (lastEventByDevice.remove(deviceId) != null) {
+                        persistDegraded(device, false);
+                    }
+                    checkStalled(device, now);
+                    continue;
+                }
 
                 Long lastEvent = lastEventByDevice.get(deviceId);
                 if (lastEvent != null && now - lastEvent < COOLDOWN_MS) continue;
@@ -118,11 +131,65 @@ public class MobileSilenceMonitor implements LifecycleObject {
                 } finally {
                     lastEventByDevice.put(deviceId, now);
                 }
+                // Dispositivo con jornada activa en silencio → marcar degradado en BD
+                // (la recuperación se persiste al volver datos frescos o por una
+                // presencia sana vía MobileTelemetryApplier).
+                persistDegraded(device, true);
                 LOGGER.info("Silence event created for device {} type={} ({} min, battery={}%, network={})",
                         device.getUniqueId(), eventType, (now - lastUpdateMs) / 60_000, battery, network);
             }
         } catch (Exception error) {
             LOGGER.warn("Mobile silence monitor check failed", error);
+        }
+    }
+
+    /**
+     * Jornada activa que sigue enviando mensajes pero no produce coordenadas nuevas
+     * (GNSS muerto, todo re-entregas de red): el panel parece vivo pero la ruta en
+     * carretera no se dibuja. Un evento cada 15 min; se resetea al volver el movimiento.
+     */
+    private void checkStalled(Device device, long now) {
+        long lastMove = qualityFilter.lastMovementMs(device.getId());
+        if (now - lastMove < STALLED_THRESHOLD_MS) {
+            lastStalledByDevice.remove(device.getId());
+            return;
+        }
+        Long lastStalled = lastStalledByDevice.get(device.getId());
+        if (lastStalled != null && now - lastStalled < COOLDOWN_MS) {
+            return;
+        }
+        Event event = new Event(Event.TYPE_MOBILE_STALLED, device.getId());
+        event.getAttributes().put("mobileSeverity", "warning");
+        event.getAttributes().put("minutesWithoutMovement", (now - lastMove) / 60_000);
+        String network = strAttr(device, "mobile.network");
+        String gps = strAttr(device, "mobile.gps");
+        if (network != null) {
+            event.getAttributes().put("network", network);
+        }
+        if (gps != null) {
+            event.getAttributes().put("gps", gps);
+        }
+        try {
+            notificationManager.updateEvents(Collections.singletonMap(event, null));
+        } finally {
+            lastStalledByDevice.put(device.getId(), now);
+        }
+        LOGGER.info("Stalled event created for device {} ({} min receiving data without new coordinates)",
+                device.getUniqueId(), (now - lastMove) / 60_000);
+    }
+
+    /**
+     * Persiste la marca de degradación en BD con el mismo patrón de
+     * MobileTelemetryApplier: solo la columna attributes, sin tocar lo demás.
+     */
+    private void persistDegraded(Device device, boolean degraded) {
+        try {
+            device.getAttributes().put("mobile.degraded", degraded);
+            storage.updateObject(device, new Request(
+                    new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
+        } catch (Exception error) {
+            LOGGER.warn("Failed to persist mobile.degraded={} for device {}",
+                    degraded, device.getId(), error);
         }
     }
 

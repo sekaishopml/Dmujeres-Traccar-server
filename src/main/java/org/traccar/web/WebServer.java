@@ -20,6 +20,7 @@ import com.google.inject.servlet.GuiceFilter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.SessionCookieConfig;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.eclipse.jetty.compression.server.CompressionConfig;
 import org.eclipse.jetty.compression.server.CompressionHandler;
 import org.eclipse.jetty.ee10.proxy.AsyncProxyServlet;
@@ -170,6 +171,21 @@ public class WebServer implements LifecycleObject {
         FilterHolder filterHolder = new FilterHolder(new OverrideFileFilter());
         filterHolder.setInitParameter("overridePath", overrideReal.toString());
         servletHandler.addFilter(filterHolder, "/*", EnumSet.of(DispatcherType.REQUEST));
+
+        // index.html y sw.js sin caché: tras cada rebuild los hashes cambian y los
+        // clientes con bundle viejo deben recibir el índice fresco en la próxima
+        // visita (evita "Failed to fetch dynamically imported module" por chunks
+        // ya eliminados). Los assets con hash siguen con el cacheControl global.
+        servletHandler.addFilter((request, response, chain) -> {
+            chain.doFilter(request, response);
+            if (response instanceof HttpServletResponse httpResponse
+                    && request instanceof HttpServletRequest httpRequest) {
+                String uri = httpRequest.getRequestURI();
+                if ("/".equals(uri) || "/index.html".equals(uri) || "/sw.js".equals(uri)) {
+                    httpResponse.setHeader("Cache-Control", "no-cache");
+                }
+            }
+        }, "/*", EnumSet.of(DispatcherType.REQUEST));
 
         // Fallback SPA: rutas sin extensión (p. ej. /replay) sirven index.html.
         servletHandler.addFilter((request, response, chain) -> {

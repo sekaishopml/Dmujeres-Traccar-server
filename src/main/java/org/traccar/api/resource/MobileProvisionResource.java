@@ -110,8 +110,8 @@ public class MobileProvisionResource extends BaseResource {
         if (request.getIntervalSeconds() < 3 || request.getIntervalSeconds() > 300) {
             throw new IllegalArgumentException("intervalSeconds must be between 3 and 300");
         }
-        if (request.getBufferMax() < 10 || request.getBufferMax() > 5000) {
-            throw new IllegalArgumentException("bufferMax must be between 10 and 5000");
+        if (request.getBufferMax() < 10 || request.getBufferMax() > 10000) {
+            throw new IllegalArgumentException("bufferMax must be between 10 and 10000");
         }
         if (!"drop_oldest".equals(request.getBufferPolicy())
                 && !"stop_capture".equals(request.getBufferPolicy())) {

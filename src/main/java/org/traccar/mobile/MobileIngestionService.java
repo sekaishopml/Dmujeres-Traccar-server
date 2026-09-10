@@ -6,7 +6,6 @@
 package org.traccar.mobile;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import org.json.JSONArray;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -15,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
 import org.traccar.database.DeviceLookupService;
-import org.traccar.database.NotificationManager;
 import org.traccar.handler.PositionPersistenceHandler;
 import org.traccar.handler.PositionPipeline;
 import org.traccar.helper.UnitsConverter;
@@ -24,10 +22,6 @@ import org.traccar.model.MobileMessage;
 import org.traccar.model.Position;
 import org.traccar.session.ConnectionManager;
 import org.traccar.session.cache.CacheManager;
-import org.traccar.storage.Storage;
-import org.traccar.storage.query.Columns;
-import org.traccar.storage.query.Condition;
-import org.traccar.storage.query.Request;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -35,6 +29,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Shared ingestion pipeline for the mobile channel. Both the MQTT consumer and the HTTP
@@ -57,6 +52,12 @@ public class MobileIngestionService {
 
     public record Result(AckStatus status, MobileEnvelope envelope) {}
 
+    /**
+     * Contador de rechazos de validación: los WARN se emiten la 1ª vez y cada 100
+     * (ver {@link #shouldLogInvalid}) para no inundar el log en tormentas de reintentos.
+     */
+    private final AtomicLong invalidMessageCount = new AtomicLong();
+
     private final Config config;
     private final ObjectMapper mapper;
     private final DeviceLookupService devices;
@@ -65,16 +66,18 @@ public class MobileIngestionService {
     private final PositionPipeline pipeline;
     private final CacheManager cacheManager;
     private final ConnectionManager connectionManager;
-    private final Storage storage;
-    private final NotificationManager notificationManager;
     private final MobileJourneyRegistry journeyRegistry;
+    private final MobileTelemetryApplier telemetry;
+    private final MobilePresenceService presence;
+    private final MobileQualityFilter quality;
 
     @Inject
     public MobileIngestionService(Config config, ObjectMapper mapper, DeviceLookupService devices,
             MobileMessageStore messages, MobileAtomicPersistence atomic,
             PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager,
-            Storage storage, NotificationManager notificationManager,
-            MobileJourneyRegistry journeyRegistry) {
+            MobileJourneyRegistry journeyRegistry,
+            MobileTelemetryApplier telemetry, MobilePresenceService presence,
+            MobileQualityFilter quality) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -83,15 +86,20 @@ public class MobileIngestionService {
         this.pipeline = pipeline;
         this.cacheManager = cacheManager;
         this.connectionManager = connectionManager;
-        this.storage = storage;
-        this.notificationManager = notificationManager;
         this.journeyRegistry = journeyRegistry;
+        this.telemetry = telemetry;
+        this.presence = presence;
+        this.quality = quality;
     }
 
     public CompletionStage<Result> process(byte[] payload, String topicDeviceId) {
         MobileEnvelope envelope = null;
         try {
             envelope = mapper.readValue(payload, MobileEnvelope.class);
+            if (isLwtHeartbeat(envelope)) {
+                handleLwtHeartbeat(envelope, topicDeviceId);
+                return CompletableFuture.completedFuture(new Result(AckStatus.ACCEPTED, null));
+            }
             final MobileEnvelope captured = envelope;
             final JsonNode root = mapper.readTree(payload);
             MobileEnvelopeValidator.validate(captured, topicDeviceId, Instant.now());
@@ -118,51 +126,63 @@ public class MobileIngestionService {
             if ("presence".equals(captured.getType())) {
                 // Heartbeat o señal de inicio/fin de jornada: cambia el estado en tiempo real
                 // y actualiza telemetría SIN persistir posiciones ficticias.
-                try {
-                    messages.completeWithoutPosition(message);
-                    MobileTelemetryMonitor.TelemetrySnapshot before =
-                            MobileTelemetryMonitor.capture(device);
-                    applyTelemetry(device, root);
-                    JsonNode presence = root.path("payload");
-                    boolean started = presence.hasNonNull("journeyStarted")
-                            && presence.get("journeyStarted").asBoolean();
-                    boolean ended = presence.hasNonNull("journeyEnded")
-                            && presence.get("journeyEnded").asBoolean();
-                    if (ended) {
-                        journeyRegistry.end(device.getId());
-                        device.getAttributes().put("mobile.journeyId", 0L);
-                    } else if (started) {
-                        long journeyId = presence.hasNonNull("journeyId")
-                                ? presence.get("journeyId").asLong() : 0L;
-                        journeyRegistry.start(device.getId(), journeyId);
-                    }
-                    connectionManager.updateDevice(device.getId(),
-                            ended ? Device.STATUS_OFFLINE : Device.STATUS_ONLINE, new Date());
-                    connectionManager.updateDevice(true, device);
-                    // Detectar cambios de telemetría y crear eventos (GPS off, red, batería).
-                    try {
-                        var events = MobileTelemetryMonitor.detectChanges(device, before, root);
-                        for (var event : events) {
-                            notificationManager.updateEvents(
-                                    java.util.Collections.singletonMap(event, null));
-                        }
-                    } catch (Exception eventsError) {
-                        LOGGER.warn("Failed to detect telemetry events", eventsError);
-                    }
-                    return CompletableFuture.completedFuture(new Result(AckStatus.ACCEPTED, captured));
-                } catch (Exception error) {
-                    LOGGER.warn("Failed to finalize presence heartbeat", error);
-                    return CompletableFuture.completedFuture(new Result(AckStatus.PENDING, captured));
-                }
+                MobilePresenceService.PresenceOutcome outcome =
+                        presence.handlePresence(device, captured, root, message);
+                AckStatus status = outcome == MobilePresenceService.PresenceOutcome.ACCEPTED
+                        ? AckStatus.ACCEPTED : AckStatus.PENDING;
+                return CompletableFuture.completedFuture(new Result(status, captured));
             }
 
             Position position = toPosition(captured, device.getId());
+            // Filtro de calidad DEDICADO al canal móvil (después de toPosition, antes del
+            // pipeline). El bypass del FilterHandler genérico queda intacto; aquí solo se
+            // marca valid=false (conservar) o se rechaza el absurdo (accuracy > reject).
+            // La reserva ya existe (dedupe por messageId), así que REJECT finaliza con
+            // messages.reject sin fila en tc_positions y el móvil borra con rejected.
+            MobileQualityFilter.Verdict verdict = quality.apply(position);
+            if (verdict == MobileQualityFilter.Verdict.DUPLICATE) {
+                // Re-entrega cacheada del mismo fix de red: no se guarda la fila, pero el
+                // mensaje se cierra sin posición y el ACK duplicate drena la cola del móvil.
+                // Telemetría y ONLINE se aplican igual para no congelar el panel.
+                try {
+                    telemetry.applyTelemetry(device, root);
+                } catch (Exception telemetryError) {
+                    LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
+                }
+                connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
+                connectionManager.updateDevice(true, device);
+                try {
+                    messages.completeWithoutPosition(message);
+                } catch (Exception completionError) {
+                    LOGGER.error("Failed to finalize duplicate mobile message", completionError);
+                    return CompletableFuture.completedFuture(new Result(AckStatus.PENDING, captured));
+                }
+                return CompletableFuture.completedFuture(new Result(AckStatus.DUPLICATE, captured));
+            }
+            if (verdict == MobileQualityFilter.Verdict.REJECT) {
+                try {
+                    messages.reject(message);
+                } catch (Exception completionError) {
+                    LOGGER.error("Failed to reject mobile message", completionError);
+                    return CompletableFuture.completedFuture(new Result(AckStatus.PENDING, captured));
+                }
+                return CompletableFuture.completedFuture(new Result(AckStatus.REJECTED, captured));
+            }
             JsonNode positionTelemetry = root.path("payload");
             if (positionTelemetry.hasNonNull("battery")) {
                 position.set("batteryLevel", positionTelemetry.get("battery").asInt());
             }
             if (positionTelemetry.hasNonNull("network")) {
                 position.set("network", positionTelemetry.get("network").asText());
+            }
+            // Origen del fix (contrato schema:1 con provider): "gps"|"network"|"fused"|
+            // "unknown". "network" = re-entrega de red wifi/celular sin GNSS; el panel
+            // excluye esos puntos de la geometría de ruta. Opcional: payloads viejos no lo traen.
+            if (positionTelemetry.hasNonNull("provider")) {
+                position.set("provider", positionTelemetry.get("provider").asText());
+            }
+            if (positionTelemetry.hasNonNull("fixAgeSec")) {
+                position.set("fixAgeSec", positionTelemetry.get("fixAgeSec").asLong());
             }
             String cacheKey = "mobile:" + captured.getMessageId();
             cacheManager.addDevice(device.getId(), cacheKey);
@@ -188,7 +208,7 @@ public class MobileIngestionService {
                     .thenApply(result2 -> {
                         if (result2.persisted()) {
                             try {
-                                applyTelemetry(device, root);
+                                telemetry.applyTelemetry(device, root);
                             } catch (Exception telemetryError) {
                                 LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
                             }
@@ -210,7 +230,7 @@ public class MobileIngestionService {
                             // que el servidor filtra, y de lo contrario la batería y el
                             // estado "en línea" se congelarían en el panel.
                             try {
-                                applyTelemetry(device, root);
+                                telemetry.applyTelemetry(device, root);
                             } catch (Exception telemetryError) {
                                 LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
                             }
@@ -236,7 +256,10 @@ public class MobileIngestionService {
                         return new Result(AckStatus.PENDING, captured);
                     });
         } catch (Exception error) {
-            LOGGER.warn("Invalid mobile message", error);
+            long invalidCount = invalidMessageCount.incrementAndGet();
+            if (shouldLogInvalid(invalidCount)) {
+                LOGGER.warn("Invalid mobile message ({} occurrences)", invalidCount, error);
+            }
             if (envelope != null) {
                 AckStatus status = error.getMessage() != null && error.getMessage().contains("expired")
                         ? AckStatus.EXPIRED : AckStatus.INVALID;
@@ -246,65 +269,54 @@ public class MobileIngestionService {
         }
     }
 
-    /** Actualiza atributos de telemetría del dispositivo sin borrar los existentes. */
-    private void applyTelemetry(Device device, JsonNode root) throws Exception {
-        if (root == null || !root.hasNonNull("payload")) {
+    /**
+     * Detecta el latido LWT del broker: la app configura el will con messageId "lwt-&lt;now&gt;",
+     * sequence 0 y presence network=none, y al morir el TCP en Doze el broker lo publica como
+     * un publish normal. OJO: las presence normales llevan sequence&gt;0 y nunca entran aquí.
+     */
+    public static boolean isLwtHeartbeat(MobileEnvelope envelope) {
+        if (envelope == null) {
+            return false;
+        }
+        String messageId = envelope.getMessageId();
+        if (messageId != null && messageId.startsWith("lwt-")) {
+            return true;
+        }
+        return envelope.getSequence() == 0 && "presence".equals(envelope.getType());
+    }
+
+    /**
+     * Throttle de WARNs de validación genuinos (sequence&lt;=0 no-LWT, envelope roto):
+     * solo la 1ª vez y cada 100, para no inundar el log en tormentas de reintentos.
+     */
+    public static boolean shouldLogInvalid(long count) {
+        return count == 1 || count % 100 == 0;
+    }
+
+    /**
+     * Contador de rechazos de validación desde el arranque (para tests y diagnóstico).
+     */
+    public long getInvalidMessageCount() {
+        return invalidMessageCount.get();
+    }
+
+    /**
+     * LWT del broker: no es un mensaje válido (sequence 0) ni aporta telemetría. Solo marca
+     * el device offline —mismo patrón que el fin de jornada en {@link MobilePresenceService}—
+     * sin reservar mensaje, sin posición y sin WARN. El evento deviceOffline lo emite
+     * ConnectionManager solo si el estado realmente cambia. Se pasa time=null para no mover
+     * lastUpdate (no hay datos frescos) y no desarmar el cooldown por device de
+     * MobileSilenceMonitor con una "recuperación" fantasma.
+     */
+    private void handleLwtHeartbeat(MobileEnvelope envelope, String topicDeviceId) {
+        LOGGER.debug("Mobile LWT heartbeat from device {} ({}); marking offline",
+                topicDeviceId, envelope.getMessageId());
+        Device device = devices.lookup(new String[] {topicDeviceId});
+        if (device == null) {
             return;
         }
-        JsonNode telemetry = root.path("payload");
-        if (telemetry.hasNonNull("pending")) {
-            device.getAttributes().put("mobile.pending", telemetry.get("pending").asLong());
-        }
-        if (telemetry.hasNonNull("battery")) {
-            int battery = telemetry.get("battery").asInt();
-            device.getAttributes().put("mobile.battery", battery);
-            Object existing = device.getAttributes().get("mobile.batteryHistory");
-            JSONArray history;
-            if (existing instanceof String && !((String) existing).isBlank()) {
-                try {
-                    history = new JSONArray((String) existing);
-                } catch (Exception error) {
-                    history = new JSONArray();
-                }
-            } else {
-                history = new JSONArray();
-            }
-            long nowSeconds = System.currentTimeMillis() / 1000;
-            if (history.length() > 0) {
-                JSONArray last = history.optJSONArray(history.length() - 1);
-                if (last != null && nowSeconds - last.optLong(0) < 60) {
-                    history.remove(history.length() - 1);
-                }
-            }
-            JSONArray sample = new JSONArray();
-            sample.put(nowSeconds);
-            sample.put(battery);
-            history.put(sample);
-            while (history.length() > 100) {
-                history.remove(0);
-            }
-            device.getAttributes().put("mobile.batteryHistory", history.toString());
-        }
-        if (telemetry.hasNonNull("network")) {
-            device.getAttributes().put("mobile.network", telemetry.get("network").asText());
-        }
-        if (telemetry.hasNonNull("vendor")) {
-            device.getAttributes().put("mobile.vendor", telemetry.get("vendor").asText());
-        }
-        if (telemetry.hasNonNull("model")) {
-            device.getAttributes().put("mobile.model", telemetry.get("model").asText());
-        }
-        if (telemetry.hasNonNull("appVersion")) {
-            device.getAttributes().put("mobile.appVersion", telemetry.get("appVersion").asText());
-        }
-        if (telemetry.hasNonNull("gps")) {
-            device.getAttributes().put("mobile.gps", telemetry.get("gps").asText());
-        }
-        if (telemetry.hasNonNull("journeyId")) {
-            device.getAttributes().put("mobile.journeyId", telemetry.get("journeyId").asLong());
-        }
-        storage.updateObject(device, new Request(
-                new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
+        connectionManager.updateDevice(device.getId(), Device.STATUS_OFFLINE, null);
+        connectionManager.updateDevice(true, device);
     }
 
     public static Position toPosition(MobileEnvelope envelope, long deviceId) {

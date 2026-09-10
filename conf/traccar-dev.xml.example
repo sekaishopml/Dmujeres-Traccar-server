@@ -13,7 +13,7 @@
 
   <!-- Web / API / Dashboard (dev: bind localhost; en VPS abrir por firewall si hace falta) -->
   <entry key="web.address">0.0.0.0</entry>
-  <entry key="web.port">8082</entry>
+  <entry key="web.port">999</entry>
   <entry key="web.path">../dashboard/build</entry>
   <entry key="web.sessionTimeout">604800</entry>
   <entry key="web.console">true</entry>
@@ -32,6 +32,35 @@
   <entry key="filter.enable">true</entry>
   <!-- Velocidad implícita máxima entre posiciones consecutivas, en nudos (140 kn ≈ 260 km/h). -->
   <entry key="filter.maxSpeed">140</entry>
+
+  <!-- Canal móvil (app Android): MQTT + fallback HTTP (mismo envelope/idempotencia).
+       En dev también se inyecta por entorno (config.useEnvironmentVariables=true):
+       MOBILE_MQTT_ENABLE / MOBILE_MQTT_PASSWORD / MOBILE_HTTP_ENABLE /
+       MOBILE_HTTP_API_KEY (ver infrastructure/scripts/run-server-dev.sh y .env.example).
+       El entorno MANDA sobre este XML; estos entries documentan los defaults dev. -->
+  <entry key="mobile.mqtt.enable">true</entry>
+  <entry key="mobile.mqtt.url">mqtt://localhost:1883</entry>
+  <entry key="mobile.mqtt.topic">dmj/v1/devices/+/telemetry</entry>
+  <entry key="mobile.mqtt.ackTopic">dmj/v1/devices/{deviceId}/ack</entry>
+  <entry key="mobile.mqtt.clientId">dmj-traccar-consumer</entry>
+  <entry key="mobile.mqtt.username">dmj-consumer</entry>
+  <!-- mobile.mqtt.password: SOLO por env MOBILE_MQTT_PASSWORD (no versionar secretos) -->
+  <entry key="mobile.mqtt.leaseSeconds">60</entry>
+  <!-- Fallback HTTP (MobileHttpResource): POST /api/mobile/v1/positions, header X-Api-Key.
+       Clave de EJEMPLO dev, coherente con AppConfig.HTTP_API_KEY de la app
+       (mobile/.../config/AppConfig.kt). En VPS/prod usar clave real vía
+       MOBILE_HTTP_API_KEY en .env (el env sobreescribe este valor). -->
+  <entry key="mobile.http.enable">true</entry>
+  <entry key="mobile.http.apiKey">dmj-dev-fallback-key</entry>
+
+  <!-- Filtro de calidad dedicado al canal móvil (MobileQualityFilter; no toca el FilterHandler genérico).
+       accuracyHide: accuracy > hide (m) se conserva con valid=false.
+       accuracyReject: accuracy > reject (m) se rechaza (el móvil borra con rejected).
+       maxSpeedKn: velocidad implícita máxima entre fixes consecutivos, en nudos (140 kn ≈ 260 km/h);
+       el salto absurdo solo marca valid=false, nunca se rechaza (el replay legítimo no se tira). -->
+  <entry key="mobile.filter.accuracyHide">80.0</entry>
+  <entry key="mobile.filter.accuracyReject">500.0</entry>
+  <entry key="mobile.filter.maxSpeedKn">140.0</entry>
 
   <!-- Logging -->
   <entry key="logger.level">info</entry>

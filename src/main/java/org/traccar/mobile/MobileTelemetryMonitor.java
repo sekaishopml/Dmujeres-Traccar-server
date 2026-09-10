@@ -61,15 +61,30 @@ public final class MobileTelemetryMonitor {
             }
         }
 
-        // Red: pérdida total, pérdida de WiFi, restauración
+        // Red: pérdida total, pérdida de WiFi, restauración.
+        // Los tres llevan atributo "cause" con el netCause del payload si existe,
+        // o "inferred" cuando el servidor lo deduce del cambio de red.
+        // También llevan "confidence" con el netConf del payload si es válido
+        // (confirmed|suspected), o "inferred" en caso contrario.
         if (before.network != null && netNew != null && !before.network.equals(netNew)) {
+            String cause = extractNetCause(root);
+            String confidence = extractConfidence(root);
             if ("none".equals(netNew)) {
-                events.add(warningEvent(Event.TYPE_MOBILE_NETWORK_LOST, deviceId, batteryNew, gpsNew, netNew));
+                Event event = warningEvent(Event.TYPE_MOBILE_NETWORK_LOST, deviceId, batteryNew, gpsNew, netNew);
+                event.getAttributes().put("cause", cause);
+                event.getAttributes().put("confidence", confidence);
+                events.add(event);
             } else if ("wifi".equals(before.network) && !"wifi".equals(netNew)) {
                 // WiFi apagado o perdido (pasa a mobile o none)
-                events.add(warningEvent(Event.TYPE_MOBILE_WIFI_LOST, deviceId, batteryNew, gpsNew, netNew));
+                Event event = warningEvent(Event.TYPE_MOBILE_WIFI_LOST, deviceId, batteryNew, gpsNew, netNew);
+                event.getAttributes().put("cause", cause);
+                event.getAttributes().put("confidence", confidence);
+                events.add(event);
             } else if (!"none".equals(netNew) && "none".equals(before.network)) {
-                events.add(infoEvent(Event.TYPE_MOBILE_NETWORK_RESTORED, deviceId, batteryNew, gpsNew, netNew));
+                Event event = infoEvent(Event.TYPE_MOBILE_NETWORK_RESTORED, deviceId, batteryNew, gpsNew, netNew);
+                event.getAttributes().put("cause", cause);
+                event.getAttributes().put("confidence", confidence);
+                events.add(event);
             }
         }
 
@@ -112,6 +127,41 @@ public final class MobileTelemetryMonitor {
         event.getAttributes().put("battery", battery);
         if (gps != null) event.getAttributes().put("gps", gps);
         if (network != null) event.getAttributes().put("network", network);
+    }
+
+    /**
+     * Causa reportada por la app en el payload ({@code netCause}), o
+     * {@code "inferred"} si no viene (el servidor la deduce del cambio de red).
+     */
+    private static String extractNetCause(JsonNode root) {
+        if (root != null && root.hasNonNull("payload")) {
+            JsonNode payload = root.path("payload");
+            if (payload.hasNonNull("netCause")) {
+                String cause = payload.get("netCause").asText();
+                if (cause != null && !cause.isBlank()) {
+                    return cause;
+                }
+            }
+        }
+        return "inferred";
+    }
+
+    /**
+     * Certeza anti-trampas reportada por la app en el payload ({@code netConf}),
+     * o {@code "inferred"} si no viene o no es válida (solo confirmed|suspected).
+     */
+    private static String extractConfidence(JsonNode root) {
+        if (root != null && root.hasNonNull("payload")) {
+            JsonNode payload = root.path("payload");
+            if (payload.hasNonNull("netConf")) {
+                String confidence = payload.get("netConf").asText();
+                if (confidence != null
+                        && MobileTelemetryApplier.NET_CONF_WHITELIST.contains(confidence)) {
+                    return confidence;
+                }
+            }
+        }
+        return "inferred";
     }
 
     private static String str(Map<String, Object> attr, String key) {

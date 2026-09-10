@@ -92,11 +92,28 @@ public class MobileMqttConsumer implements LifecycleObject {
             builder.simpleAuth(Mqtt5SimpleAuth.builder().username(username)
                     .password(password == null ? new byte[0] : password.getBytes(StandardCharsets.UTF_8)).build());
         }
-        client = builder.buildAsync();
+        client = builder
+                .automaticReconnect()
+                .initialDelay(2, TimeUnit.SECONDS)
+                .maxDelay(30, TimeUnit.SECONDS)
+                .applyAutomaticReconnect()
+                .addConnectedListener(context -> subscribe())
+                .buildAsync();
         accepting = true;
-        client.connect().thenCompose(ignored -> client.subscribeWith()
+        // Reconexión automática con backoff (2 s → 30 s): sin esto, cualquier
+        // reinicio del broker dejaba la ingesta muerta en silencio hasta
+        // reiniciar Traccar. Al reconectar se re-suscribe (ver subscribe()).
+        client.connect();
+    }
+
+    /** (Re)suscribe el tópico de telemetría; idempotente, se llama al conectar. */
+    private synchronized void subscribe() {
+        if (client == null) {
+            return;
+        }
+        client.subscribeWith()
                 .topicFilter(config.getString(Keys.MOBILE_MQTT_TOPIC)).qos(MqttQos.AT_LEAST_ONCE)
-                .callback(this::onPublish).executor(workers).manualAcknowledgement(true).send())
+                .callback(this::onPublish).executor(workers).manualAcknowledgement(true).send()
                 .whenComplete((ignored, error) -> {
                     if (error != null) {
                         LOGGER.error("Mobile MQTT connection failed", error);

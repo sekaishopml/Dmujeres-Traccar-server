@@ -57,6 +57,15 @@ public final class Keys {
     public static final ConfigKey<String> MOBILE_HTTP_API_KEY = new StringConfigKey(
             "mobile.http.apiKey", List.of(KeyType.CONFIG));
 
+    public static final ConfigKey<Double> MOBILE_FILTER_ACCURACY_HIDE = new DoubleConfigKey(
+            "mobile.filter.accuracyHide", List.of(KeyType.CONFIG), 80.0);
+
+    public static final ConfigKey<Double> MOBILE_FILTER_ACCURACY_REJECT = new DoubleConfigKey(
+            "mobile.filter.accuracyReject", List.of(KeyType.CONFIG), 500.0);
+
+    public static final ConfigKey<Double> MOBILE_FILTER_MAX_SPEED_KN = new DoubleConfigKey(
+            "mobile.filter.maxSpeedKn", List.of(KeyType.CONFIG), 140.0);
+
     public static final ConfigKey<String> EMQX_API_URL = new StringConfigKey(
             "emqx.apiUrl", List.of(KeyType.CONFIG), "http://127.0.0.1:18083");
 

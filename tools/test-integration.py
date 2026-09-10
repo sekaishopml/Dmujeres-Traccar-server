@@ -131,7 +131,7 @@ messages = {
     'nto': '^NB,123456789012345,N00,050923,233519,V,N,2236.1994,E,11315.4645,5,0,000000000000,460:00:0:75217090,-04:00,,1693971319,31,2DA5&',
 }
 
-baseUrl = 'http://localhost:8082'
+baseUrl = 'http://localhost:999'
 user = { 'email' : 'admin', 'password' : 'admin' }
 
 debug = '-v' in sys.argv

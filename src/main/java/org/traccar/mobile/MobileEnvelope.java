@@ -102,6 +102,24 @@ public class MobileEnvelope {
         private Double speed;
         private Double bearing;
         private Double altitude;
+        private String provider;
+        private Long fixAgeSec;
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public void setProvider(String provider) {
+            this.provider = provider;
+        }
+
+        public Long getFixAgeSec() {
+            return fixAgeSec;
+        }
+
+        public void setFixAgeSec(Long fixAgeSec) {
+            this.fixAgeSec = fixAgeSec;
+        }
 
         public double getLatitude() {
             return latitude;

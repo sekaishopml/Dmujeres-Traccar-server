@@ -79,6 +79,7 @@ public class Event extends Message {
     public static final String TYPE_MOBILE_WIFI_LOST = "mobileWifiLost";
     public static final String TYPE_MOBILE_BATTERY_CRITICAL = "mobileBatteryCritical";
     public static final String TYPE_MOBILE_POSSIBLE_POWER_OFF = "mobilePossiblePowerOff";
+    public static final String TYPE_MOBILE_STALLED = "mobileStalled";
 
     private Date eventTime;
 

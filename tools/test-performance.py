@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-BASE_URL = "http://localhost:8082"
+BASE_URL = "http://localhost:999"
 SERVER_HOST = "localhost:5055"
 USER = {"email": "admin", "password": "admin"}
 DEVICES = 200

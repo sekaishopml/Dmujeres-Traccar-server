@@ -28,9 +28,9 @@ servers:
         default: localhost
       port:
         enum:
-          - '8082'
+          - '999'
           - '80'
-        default: '8082'
+        default: '999'
 security:
   - BasicAuth: []
   - ApiKey: []
@@ -73,6 +73,8 @@ tags:
     description: Retrieving server statistics
   - name: Health
     description: Checking server health status
+  - name: Mobile
+    description: DMujeres fork mobile channel (MQTT envelope over HTTP fallback + provisioning)
   - name: Orders
     description: Order management
   - name: Audit
@@ -3800,6 +3802,100 @@ paths:
         '401':
           description: Unauthorized
           content: {}
+  /mobile/provision:
+    post:
+      operationId: postMobileProvision
+      summary: Provision a mobile collaborator (DMujeres fork)
+      description: >-
+        Admin only. Creates or updates the Traccar device (uniqueId = username)
+        with mobile tuning attributes and creates/updates the MQTT user in EMQX
+        via API (idempotent: existing user gets a password update). The app then
+        publishes to dmj/v1/devices/{id}/telemetry with these credentials.
+      tags:
+        - Mobile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileProvisionRequest'
+      responses:
+        '200':
+          description: Device already existed, attributes updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileProvisionResponse'
+        '201':
+          description: Device created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileProvisionResponse'
+        '400':
+          description: Invalid username, password or tuning values
+          content: {}
+        '401':
+          description: Unauthorized (admin required)
+          content: {}
+  /mobile/v1/positions:
+    post:
+      operationId: postMobilePositions
+      summary: Mobile HTTP fallback batch (DMujeres fork)
+      description: >-
+        Same envelope and idempotency as the MQTT channel
+        (dmj/v1/devices/{id}/telemetry, QoS 1). Accepts a JSON array of
+        MobileEnvelope objects (schema 1, type position|presence). Each element
+        is validated, deduplicated by sequence/messageId (tc_mobile_messages)
+        and persisted atomically. Processed serially; if 20 requests are already
+        in flight the server answers 503 with Retry-After so the app backs off.
+        Requires header X-Api-Key (mobile.http.apiKey). Disabled with 404 unless
+        mobile.http.enable=true.
+      tags:
+        - Mobile
+      parameters:
+        - name: X-Api-Key
+          in: header
+          required: true
+          description: Shared fallback key (mobile.http.apiKey)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              items:
+                $ref: '#/components/schemas/MobileEnvelope'
+      responses:
+        '200':
+          description: Batch processed, per-message ACKs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobilePositionsResult'
+        '400':
+          description: Body is not a non-empty JSON array
+          content: {}
+        '401':
+          description: Missing or wrong X-Api-Key
+          content: {}
+        '404':
+          description: Fallback disabled (mobile.http.enable=false)
+          content: {}
+        '503':
+          description: Concurrency limit reached or temporary failure, retry with backoff
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobilePositionsResult'
 components:
   schemas:
     Position:
@@ -4609,6 +4705,223 @@ components:
           type: object
           properties: {}
           description: Additional action attributes
+    MobileEnvelope:
+      type: object
+      description: >-
+        DMujeres fork mobile envelope (schema 1). Sent over MQTT
+        (dmj/v1/devices/{id}/telemetry, QoS 1) or over the HTTP fallback batch.
+        Deduplicated by sequence/messageId; the server answers on
+        dmj/v1/devices/{id}/ack (or per-item status over HTTP) with
+        accepted|duplicate|rejected|invalid|expired|pending.
+      required:
+        - schema
+        - type
+        - messageId
+        - deviceId
+        - sequence
+        - sentAt
+        - observedAt
+      properties:
+        schema:
+          type: integer
+          example: 1
+          description: Envelope version, must be 1
+        type:
+          type: string
+          enum:
+            - position
+            - presence
+            - ack
+          description: >-
+            position carries GPS; presence is a heartbeat/telemetry-only signal
+            (journeyStarted/journeyEnded, no fictitious position stored);
+            ack is server-to-app only
+        messageId:
+          type: string
+          pattern: '[A-Za-z0-9_-]{16,64}'
+          example: dmj-1a2b3c4d-00000000000f-a1b2c3d4e5f60718293a4b5c6d7e8f90
+          description: Idempotency key, unique per message
+        deviceId:
+          type: string
+          pattern: '[A-Za-z0-9._-]{1,128}'
+          example: ana.perez
+          description: Must equal the {id} in the MQTT topic
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 15
+          description: Monotonic per-device sequence from the app offline queue
+        sentAt:
+          type: string
+          format: date-time
+          description: When the app sent the envelope (ISO-8601)
+        observedAt:
+          type: string
+          format: date-time
+          description: >-
+            GPS fix time for position, generation time for presence (ISO-8601,
+            max 7 days old; clock skew >1h is kept but flagged server-side)
+        payload:
+          type: object
+          description: >-
+            position requires latitude/longitude; presence carries telemetry
+            (pending, battery, network, vendor, model, appVersion, gps,
+            journeyStarted, journeyEnded, journeyId)
+          properties:
+            latitude:
+              type: number
+              minimum: -90
+              maximum: 90
+            longitude:
+              type: number
+              minimum: -180
+              maximum: 180
+            accuracy:
+              type: number
+              minimum: 0
+            speed:
+              type: number
+              minimum: 0
+              description: km/h as reported by the app
+            bearing:
+              type: number
+              minimum: 0
+              maximum: 360
+            altitude:
+              type: number
+            pending:
+              type: integer
+              description: Offline queue depth when the message was built
+            battery:
+              type: integer
+              minimum: 0
+              maximum: 100
+            network:
+              type: string
+              enum:
+                - wifi
+                - mobile
+                - none
+                - other
+            vendor:
+              type: string
+            model:
+              type: string
+            appVersion:
+              type: string
+            gps:
+              type: string
+              enum:
+                - 'on'
+                - 'off'
+            journeyStarted:
+              type: boolean
+            journeyEnded:
+              type: boolean
+            journeyId:
+              type: integer
+              format: int64
+    MobileAck:
+      type: object
+      description: Per-message acknowledgement (MQTT ack topic or HTTP item)
+      required:
+        - status
+      properties:
+        deviceId:
+          type: string
+        messageId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum:
+            - accepted
+            - duplicate
+            - rejected
+            - invalid
+            - expired
+            - pending
+            - throttled
+            - error
+          description: >-
+            accepted/duplicate confirm delivery (both delete from the app
+            queue); rejected/invalid/expired are terminal; pending/throttled/
+            error must be retried
+    MobilePositionsResult:
+      type: object
+      required:
+        - results
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/MobileAck'
+    MobileProvisionRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          pattern: '[A-Za-z0-9._-]{1,128}'
+          example: ana.perez
+          description: Becomes the Traccar uniqueId, MQTT user and envelope deviceId
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: MQTT password (hashed by EMQX, never stored plaintext)
+        name:
+          type: string
+          description: Display name, defaults to username
+        intervalSeconds:
+          type: integer
+          minimum: 3
+          maximum: 300
+          default: 10
+        bufferMax:
+          type: integer
+          minimum: 10
+          maximum: 5000
+          default: 5000
+        bufferPolicy:
+          type: string
+          enum:
+            - drop_oldest
+            - stop_capture
+          default: drop_oldest
+        ackTimeoutSeconds:
+          type: integer
+          minimum: 5
+          maximum: 60
+          default: 15
+        maxRetries:
+          type: integer
+          minimum: 3
+          maximum: 200
+          default: 30
+    MobileProvisionResponse:
+      type: object
+      properties:
+        deviceId:
+          type: integer
+          format: int64
+        username:
+          type: string
+        intervalSeconds:
+          type: integer
+        bufferMax:
+          type: integer
+        bufferPolicy:
+          type: string
+        ackTimeoutSeconds:
+          type: integer
+        maxRetries:
+          type: integer
   securitySchemes:
     BasicAuth:
       type: http
