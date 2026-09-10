@@ -80,6 +80,7 @@ public class Event extends Message {
     public static final String TYPE_MOBILE_BATTERY_CRITICAL = "mobileBatteryCritical";
     public static final String TYPE_MOBILE_POSSIBLE_POWER_OFF = "mobilePossiblePowerOff";
     public static final String TYPE_MOBILE_STALLED = "mobileStalled";
+    public static final String TYPE_MOBILE_DIAGNOSTICS = "mobileDiagnostics";
 
     private Date eventTime;
 

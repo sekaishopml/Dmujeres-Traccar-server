@@ -3896,6 +3896,76 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MobilePositionsResult'
+  /mobile/v1/diagnostics:
+    post:
+      operationId: postMobileDiagnostics
+      summary: Client diagnostics report (DMujeres fork)
+      description: >-
+        Device diagnostics pushed by the mobile app so fleet health can be watched
+        from the panel. The body is a single JSON object of at most 10000 bytes and
+        only the whitelisted schema below is kept: unknown fields are dropped,
+        numbers are truncated to long/int and strings are sanitized and capped. The
+        normalized report is stored on the device as the `lastDiagnostics` attribute
+        (compact JSON, at most 4096 chars and shrunk so that the whole attributes
+        column still fits) plus `lastDiagnosticsAt` (server epoch millis). Anything
+        arriving less than 20s after the last accepted report of the same device is
+        ignored. A `mobileDiagnostics` event is emitted only when
+        health.crashes24h > 0, health.stuckStops > 0, health.clockSteps24h > 0 or
+        mqtt.status == "down". Authentication mirrors /mobile/v1/config: shared
+        header X-Api-Key (mobile.http.apiKey) and the device resolved by uniqueId
+        from X-Device-Id (query deviceId as fallback). Disabled with 404 unless
+        mobile.http.enable=true.
+      tags:
+        - Mobile
+      parameters:
+        - name: X-Api-Key
+          in: header
+          required: true
+          description: Shared mobile key (mobile.http.apiKey)
+          schema:
+            type: string
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: Device uniqueId
+          schema:
+            type: string
+        - name: deviceId
+          in: query
+          required: false
+          description: Device uniqueId, used when the header is absent
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileDiagnosticsReport'
+      responses:
+        '204':
+          description: Accepted, or silently ignored inside the 20s per-device window
+        '400':
+          description: No device identifier or body is not a JSON object
+          content: {}
+        '401':
+          description: Missing or wrong X-Api-Key
+          content: {}
+        '403':
+          description: Body deviceId does not match the authenticated device
+          content: {}
+        '404':
+          description: Channel disabled (mobile.http.enable=false) or unknown device
+          content: {}
+        '413':
+          description: Body larger than 10000 bytes
+          content: {}
+        '415':
+          description: Content-Type is not application/json
+          content: {}
+        '500':
+          description: Device attributes could not be persisted
+          content: {}
 components:
   schemas:
     Position:
@@ -4859,6 +4929,111 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MobileAck'
+    MobileDiagnosticsReport:
+      type: object
+      description: >-
+        Whitelist enforced server side; any other key (at any level) is discarded
+        before storing. Numbers arrive as JSON numbers (doubles are truncated).
+      properties:
+        deviceId:
+          type: integer
+          format: int64
+          description: Optional; when present it must equal the authenticated device id
+        ts:
+          type: integer
+          format: int64
+          description: Client epoch millis of the snapshot (server time when absent)
+        report:
+          type: object
+          properties:
+            app:
+              type: object
+              properties:
+                versionCode:
+                  type: integer
+                  description: Android versionCode
+                versionName:
+                  type: string
+                  description: Android versionName (sanitized, max 64 chars)
+            journey:
+              type: object
+              properties:
+                active:
+                  type: boolean
+                elapsedMs:
+                  type: integer
+                  format: int64
+                startAt:
+                  type: integer
+                  format: int64
+            buffer:
+              type: object
+              properties:
+                pending:
+                  type: integer
+                  description: Messages waiting in the offline buffer
+                max:
+                  type: integer
+                  description: Configured buffer size (mobile.bufferMax)
+                policy:
+                  type: string
+                  description: drop_oldest or stop_capture, stored lowercase
+            mqtt:
+              type: object
+              properties:
+                status:
+                  type: string
+                  description: connected, disconnected or down (stored lowercase)
+                lastAckAt:
+                  type: integer
+                  format: int64
+                lastFixAt:
+                  type: integer
+                  format: int64
+                reconnects:
+                  type: integer
+            net:
+              type: object
+              properties:
+                cause:
+                  type: string
+                  description: Loss cause reported by the app (same vocabulary as netCause)
+                cellular:
+                  type: boolean
+                airplane:
+                  type: boolean
+            power:
+              type: object
+              properties:
+                battery:
+                  type: integer
+                  minimum: -1
+                  maximum: 100
+                exempt:
+                  type: boolean
+                  description: Battery optimization exempt for the tracking app
+                idleMs:
+                  type: integer
+                  format: int64
+                  description: Millis the app was idle (Doze) since last work
+            health:
+              type: object
+              properties:
+                crashes24h:
+                  type: integer
+                  description: Alert triggers when greater than zero
+                anrs24h:
+                  type: integer
+                  description: Stored but never alerts by itself
+                stuckStops:
+                  type: integer
+                  description: Alert triggers when greater than zero
+                clockSteps24h:
+                  type: integer
+                  description: Alert triggers when greater than zero
+                lastStartError:
+                  type: string
+                  description: Last foreground-service start failure, sanitized and capped
     MobileProvisionRequest:
       type: object
       required:
