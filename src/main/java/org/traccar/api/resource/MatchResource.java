@@ -60,6 +60,40 @@ public class MatchResource extends BaseResource {
     // a 10 s conserva TODO: pata típica 30-150 m).
     private static final double MIN_LEG_METERS = 12;
     private static final long MIN_LEG_MS = 120_000;
+    // Cache compartida (el resource se instancia por request): repetir la
+    // misma repetición no vuelve a casar. 10 min TTL, tope 150 entradas.
+    private static final long CACHE_TTL_MS = 10 * 60 * 1000;
+    private static final int CACHE_MAX = 150;
+    private static final java.util.concurrent.ConcurrentHashMap<String, CachedMatch> MATCH_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static class CachedMatch {
+        final ObjectNode payload;
+        final long storedAt;
+        CachedMatch(ObjectNode payload, long storedAt) {
+            this.payload = payload;
+            this.storedAt = storedAt;
+        }
+    }
+
+    private static ObjectNode cachedGet(String key) {
+        CachedMatch entry = MATCH_CACHE.get(key);
+        if (entry == null) {
+            return null;
+        }
+        if (System.currentTimeMillis() - entry.storedAt > CACHE_TTL_MS) {
+            MATCH_CACHE.remove(key);
+            return null;
+        }
+        return entry.payload;
+    }
+
+    private static void cachedPut(String key, ObjectNode payload) {
+        if (MATCH_CACHE.size() >= CACHE_MAX) {
+            MATCH_CACHE.clear();
+        }
+        MATCH_CACHE.put(key, new CachedMatch(payload, System.currentTimeMillis()));
+    }
 
     @Inject
     private ObjectMapper mapper;
@@ -81,6 +115,12 @@ public class MatchResource extends BaseResource {
         try {
             permissionsService.checkPermission(Device.class, getUserId(), body.path("deviceId").asLong(0));
             double accuracy = body.path("accuracy").asDouble(30.0);
+            String cacheKey = "P:" + body.path("deviceId").asLong(0) + ":" + accuracy
+                    + ":" + body.path("tracks").toString().hashCode();
+            ObjectNode cached = cachedGet(cacheKey);
+            if (cached != null) {
+                return Response.ok(cached).build();
+            }
             JsonNode tracks = body.path("tracks");
             if (!tracks.isArray()) {
                 response.putNull("segments");
@@ -120,6 +160,7 @@ public class MatchResource extends BaseResource {
             response.set("segments", segments);
             response.put("distance", totalDistance);
             response.put("skipped", skipped);
+            cachedPut(cacheKey, response);
             return Response.ok(response).build();
         } catch (Exception e) {
             response.putNull("segments");
@@ -140,6 +181,15 @@ public class MatchResource extends BaseResource {
             @QueryParam("accuracy") Double accuracyOpt) throws StorageException {
         permissionsService.checkPermission(Device.class, getUserId(), deviceId);
 
+        double accuracy = accuracyOpt != null && accuracyOpt > 0 ? accuracyOpt : 30.0;
+        String cacheKey = "G:" + deviceId + ":"
+                + (from != null ? from.getTime() : 0) + ":"
+                + (to != null ? to.getTime() : 0) + ":" + accuracy;
+        ObjectNode cached = cachedGet(cacheKey);
+        if (cached != null) {
+            return Response.ok(cached).build();
+        }
+
         Stream<Position> stream = (from != null && to != null)
                 ? PositionUtil.getPositionsStream(storage, deviceId, from, to)
                 : storage.getObjectsStream(Position.class, new Request(
@@ -157,7 +207,6 @@ public class MatchResource extends BaseResource {
             return Response.ok(empty).build();
         }
 
-        double accuracy = accuracyOpt != null && accuracyOpt > 0 ? accuracyOpt : 30.0;
         positions = decimateForMatch(positions);
         List<double[]> points = new ArrayList<>();
         for (Position position : positions) {
@@ -183,6 +232,7 @@ public class MatchResource extends BaseResource {
         response.put("distance", matchedTrack.distance);
         response.put("raw", positions.size());
         response.put("accuracy", accuracy);
+        cachedPut(cacheKey, response);
         return Response.ok(response).build();
     }
 
