@@ -1132,6 +1132,51 @@ paths:
         '400':
           description: Bad request
           content: {}
+  /positions/match:
+    get:
+      operationId: getPositionsMatch
+      summary: Road-snapped trace (DMujeres fork, map-matching)
+      description: >-
+        Builds the road-snapped trace for a replay range: reads the positions,
+        decimates to match input (max 2000 after stop collapsing), sends them in
+        300-point chunks to the local GraphHopper match service and returns the
+        hybrid polyline (snapped where a road exists within 60 m, raw fixes
+        elsewhere, so coverage is never lost).
+      tags:
+        - Positions
+      parameters:
+        - name: deviceId
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Matched trace or null fallback
+    post:
+      operationId: postPositionsMatch
+      summary: Match client-cleaned tracks (DMujeres fork, map-matching)
+      description: >-
+        Matches tracks already cleaned by the dashboard (gap-split chunks of
+        decimated fixes): { "tracks": [ [[lon,lat],...], ... ], "accuracy": 25,
+        "deviceId": 0 } and returns { "segments": [ [[lon,lat],...], null... ],
+        "distance": m, "skipped": n }. A null segment means that track did not
+        match (client draws the honest trace there).
+      tags:
+        - Positions
+      responses:
+        '200':
+          description: Matched segments
   /positions:
     get:
       operationId: getPositions
