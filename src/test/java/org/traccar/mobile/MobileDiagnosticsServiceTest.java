@@ -66,7 +66,7 @@ public class MobileDiagnosticsServiceTest {
                 + "\"mqtt\":{\"status\":\"DOWN\",\"lastAckAt\":120,\"lastFixAt\":121,\"reconnects\":2},"
                 + "\"net\":{\"cause\":\"WiFi_Lost\",\"cellular\":false,\"airplane\":false},"
                 + "\"power\":{\"battery\":78,\"exempt\":false,\"idleMs\":1000},"
-                + "\"health\":{\"crashes24h\":0,\"anrs24h\":0,\"stuckStops\":0,\"clockSteps24h\":0},"
+                + "\"health\":{\"crashes24h\":0,\"anrs24h\":0,\"stuckStops\":0,\"clockSteps24h\":0,\"speedStuck24h\":3},"
                 + "\"spy\":{\"token\":\"nope\"}},\"rootLevel\":\"gone\"}";
 
         service.ingest(device(), body, NOW);
@@ -88,6 +88,7 @@ public class MobileDiagnosticsServiceTest {
         assertEquals("drop_oldest", report.path("buffer").path("policy").asText());
         assertEquals("down", report.path("mqtt").path("status").asText());
         assertEquals("wifi_lost", report.path("net").path("cause").asText());
+        assertEquals(3, report.path("health").path("speedStuck24h").asInt());
         assertTrue(report.path("journey").path("active").asBoolean());
         assertFalse(report.path("net").path("cellular").asBoolean());
     }

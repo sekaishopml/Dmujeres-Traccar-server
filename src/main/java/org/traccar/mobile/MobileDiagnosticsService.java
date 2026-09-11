@@ -270,6 +270,7 @@ public class MobileDiagnosticsService {
             copyInt(health, healthNode, "anrs24h", 0, MAX_COUNTER);
             copyInt(health, healthNode, "stuckStops", 0, MAX_COUNTER);
             copyInt(health, healthNode, "clockSteps24h", 0, MAX_COUNTER);
+            copyInt(health, healthNode, "speedStuck24h", 0, MAX_COUNTER);
             copyString(health, healthNode, "lastStartError", false);
             putIfNotEmpty(groups, "health", healthNode);
 
@@ -354,6 +355,7 @@ public class MobileDiagnosticsService {
         event.getAttributes().put("anrs24h", health.path("anrs24h").asInt(0));
         event.getAttributes().put("stuckStops", health.path("stuckStops").asInt(0));
         event.getAttributes().put("clockSteps24h", health.path("clockSteps24h").asInt(0));
+        event.getAttributes().put("speedStuck24h", health.path("speedStuck24h").asInt(0));
         if (mqtt.has("status")) {
             event.getAttributes().put("mqttStatus", mqtt.get("status").asText());
         }
