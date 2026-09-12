@@ -148,14 +148,22 @@ public class MatchResource extends BaseResource {
                     continue;
                 }
                 ArrayNode segment = mapper.createArrayNode();
+                double previousLon = Double.NaN;
+                double previousLat = Double.NaN;
                 for (double[] coord : matched.coords) {
                     ArrayNode point = mapper.createArrayNode();
                     point.add(coord[0]);
                     point.add(coord[1]);
                     segment.add(point);
+                    // Distancia HONESTA de lo dibujado (la suma de matchLength
+                    // de los trozos solapa uniones y giros one-way: inflaba 20x).
+                    if (Double.isFinite(previousLon)) {
+                        totalDistance += haversineMeters(previousLat, previousLon, coord[1], coord[0]);
+                    }
+                    previousLon = coord[0];
+                    previousLat = coord[1];
                 }
                 segments.add(segment);
-                totalDistance += matched.distance;
             }
             response.set("segments", segments);
             response.put("distance", totalDistance);
@@ -222,14 +230,22 @@ public class MatchResource extends BaseResource {
             return Response.ok(fallback).build();
         }
         ArrayNode matched = mapper.createArrayNode();
+        double honestDistance = 0;
+        double previousLon = Double.NaN;
+        double previousLat = Double.NaN;
         for (double[] coord : matchedTrack.coords) {
             ArrayNode point = mapper.createArrayNode();
             point.add(coord[0]);
             point.add(coord[1]);
             matched.add(point);
+            if (Double.isFinite(previousLon)) {
+                honestDistance += haversineMeters(previousLat, previousLon, coord[1], coord[0]);
+            }
+            previousLon = coord[0];
+            previousLat = coord[1];
         }
         response.set("matched", matched);
-        response.put("distance", matchedTrack.distance);
+        response.put("distance", honestDistance);
         response.put("raw", positions.size());
         response.put("accuracy", accuracy);
         cachedPut(cacheKey, response);
