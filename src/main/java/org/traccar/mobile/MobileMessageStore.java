@@ -131,33 +131,43 @@ public class MobileMessageStore {
      * clasifique el estado real (converge al ACK correcto).
      */
     public void complete(MobileMessage message, long positionId) throws StorageException {
+        // OJO: capturar id/token ANTES de mutar el objeto (el lease propio es la
+        // prueba de propiedad para el UPDATE condicional; nullarlo antes lo
+        // volvería `leasetoken = NULL`, que nunca iguala y condenaría todo a PENDING).
+        long id = message.getId();
+        String token = message.getLeaseToken();
         message.setPositionId(positionId);
         message.setStatus("accepted");
         message.setLeaseUntil(null);
         message.setLeaseToken(null);
         message.setUpdated(new Date());
-        if (!conditionalFinalize(message, positionId, "accepted")) {
+        if (!conditionalFinalize(id, token, positionId, "accepted")) {
             resolveConflict(message);
         }
     }
 
     public void completeWithoutPosition(MobileMessage message) throws StorageException {
+        long id = message.getId();
+        String token = message.getLeaseToken();
         message.setPositionId(0);
         message.setStatus("accepted");
         message.setLeaseUntil(null);
         message.setLeaseToken(null);
         message.setUpdated(new Date());
-        if (!conditionalFinalize(message, 0, "accepted")) {
+        if (!conditionalFinalize(id, token, 0, "accepted")) {
             resolveConflict(message);
         }
     }
 
     public void reject(MobileMessage message) throws StorageException {
+        long id = message.getId();
+        String token = message.getLeaseToken();
+        long positionId = message.getPositionId();
         message.setStatus("rejected");
         message.setLeaseUntil(null);
         message.setLeaseToken(null);
         message.setUpdated(new Date());
-        if (!conditionalFinalize(message, message.getPositionId(), "rejected")) {
+        if (!conditionalFinalize(id, token, positionId, "rejected")) {
             resolveConflict(message);
         }
     }
@@ -166,7 +176,7 @@ public class MobileMessageStore {
      * UPDATE condicional atómico: solo finaliza si el mensaje sigue en
      * 'processing' con NUESTRO lease. Devuelve true si aplicó.
      */
-    boolean conditionalFinalize(MobileMessage message, long positionId, String status) {
+    boolean conditionalFinalize(long id, String token, long positionId, String status) {
         try (Connection connection = dataSource.getConnection();
                 PreparedStatement statement = connection.prepareStatement(
                         "UPDATE tc_mobile_messages SET positionid = ?, status = ?, "
@@ -175,11 +185,11 @@ public class MobileMessageStore {
             statement.setLong(1, positionId);
             statement.setString(2, status);
             statement.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
-            statement.setLong(4, message.getId());
-            statement.setString(5, message.getLeaseToken());
+            statement.setLong(4, id);
+            statement.setString(5, token);
             return statement.executeUpdate() == 1;
         } catch (SQLException error) {
-            LOGGER.warn("Failed to finalize mobile message {}", message.getMessageId(), error);
+            LOGGER.warn("Failed to finalize mobile message id={}", id, error);
             return false;
         }
     }

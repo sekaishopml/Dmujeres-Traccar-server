@@ -55,6 +55,11 @@ public class MobileMessageOwnershipTest {
 
         store.completeWithoutPosition(message());
 
+        // El lease propio debe viajar en el WHERE (id + token): nullarlo antes
+        // del UPDATE lo volvería `leasetoken = NULL` (nunca iguala) y todo
+        // caería a PENDING. Esta verificación habría cazado ese bug.
+        verify(statement).setLong(4, 5L);
+        verify(statement).setString(5, "token-abc");
         verify(storage, never()).getObject(eq(MobileMessage.class), any(Request.class));
     }
 

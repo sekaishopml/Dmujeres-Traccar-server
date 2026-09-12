@@ -47,10 +47,12 @@ public class MobileTelemetryApplier {
             "in_service", "out_of_service", "emergency", "unknown");
 
     private final Storage storage;
+    private final MobilePresenceTracker tracker;
 
     @Inject
-    public MobileTelemetryApplier(Storage storage) {
+    public MobileTelemetryApplier(Storage storage, MobilePresenceTracker tracker) {
         this.storage = storage;
+        this.tracker = tracker;
     }
 
     /** Actualiza atributos de telemetría del dispositivo sin borrar los existentes. */
@@ -108,7 +110,13 @@ public class MobileTelemetryApplier {
             device.getAttributes().put("mobile.gps", telemetry.get("gps").asText());
         }
         if (telemetry.hasNonNull("journeyId")) {
-            device.getAttributes().put("mobile.journeyId", telemetry.get("journeyId").asLong());
+            long journeyId = telemetry.get("journeyId").asLong();
+            // Anti-resurrección también en atributos: un replay con journeyId
+            // viejo (anterior al último cierre) no debe reflotar mobile.journeyId
+            // (el panel lo lee); la ruta igual se ingresa, solo no reabre.
+            if (tracker.shouldReopen(device.getId(), device.getUniqueId(), journeyId)) {
+                device.getAttributes().put("mobile.journeyId", journeyId);
+            }
         }
         if (telemetry.hasNonNull("rttMs")) {
             device.getAttributes().put("mobile.rttMs", telemetry.get("rttMs").asLong());

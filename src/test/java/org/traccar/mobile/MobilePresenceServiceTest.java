@@ -48,7 +48,8 @@ public class MobilePresenceServiceTest {
         journeyRegistry = mock(MobileJourneyRegistry.class);
         connectionManager = mock(ConnectionManager.class);
         tracker = mock(MobilePresenceTracker.class);
-        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage);
+        when(tracker.shouldReopen(anyLong(), any(), anyLong())).thenReturn(true);
+        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage, tracker);
         service = new MobilePresenceService(
                 mock(MobileMessageStore.class),
                 journeyRegistry,
@@ -149,7 +150,7 @@ public class MobilePresenceServiceTest {
         device.getAttributes().put("mobile.degraded", true);
         JsonNode root = json("{\"payload\":{\"network\":\"wifi\",\"rttMs\":150,\"signal\":3}}");
 
-        new MobileTelemetryApplier(storage).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
@@ -165,7 +166,7 @@ public class MobilePresenceServiceTest {
         device.getAttributes().put("mobile.degraded", true);
         JsonNode root = json("{\"payload\":{\"network\":\"mobile\",\"rttMs\":5000,\"signal\":1}}");
 
-        new MobileTelemetryApplier(storage).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
@@ -180,7 +181,7 @@ public class MobilePresenceServiceTest {
         // Sin rttMs en el payload: red viva se considera flujo sano.
         JsonNode root = json("{\"payload\":{\"network\":\"mobile\"}}");
 
-        new MobileTelemetryApplier(storage).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));

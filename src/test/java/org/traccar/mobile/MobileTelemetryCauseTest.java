@@ -38,7 +38,7 @@ public class MobileTelemetryCauseTest {
     @BeforeEach
     public void setUp() {
         storage = mock(Storage.class);
-        telemetry = new MobileTelemetryApplier(storage);
+        telemetry = new MobileTelemetryApplier(storage, mock(MobilePresenceTracker.class));
     }
 
     @Test
@@ -102,7 +102,7 @@ public class MobileTelemetryCauseTest {
             Storage attemptStorage = mock(Storage.class);
             Device device = device();
             JsonNode root = json("{\"payload\":{\"netCause\":\"" + cause + "\"}}");
-            new MobileTelemetryApplier(attemptStorage).applyTelemetry(device, root);
+            new MobileTelemetryApplier(attemptStorage, mock(MobilePresenceTracker.class)).applyTelemetry(device, root);
             ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
             verify(attemptStorage, times(1)).updateObject(captor.capture(), any(Request.class));
             assertEquals(cause, captor.getValue().getAttributes().get("mobile.netCause"));
@@ -297,7 +297,7 @@ public class MobileTelemetryCauseTest {
             Storage attemptStorage = mock(Storage.class);
             Device device = device();
             JsonNode root = json("{\"payload\":{\"netConf\":\"" + conf + "\"}}");
-            new MobileTelemetryApplier(attemptStorage).applyTelemetry(device, root);
+            new MobileTelemetryApplier(attemptStorage, mock(MobilePresenceTracker.class)).applyTelemetry(device, root);
             ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
             verify(attemptStorage, times(1)).updateObject(captor.capture(), any(Request.class));
             assertEquals(conf, captor.getValue().getAttributes().get("mobile.netConf"));
@@ -308,7 +308,7 @@ public class MobileTelemetryCauseTest {
             Storage attemptStorage = mock(Storage.class);
             Device device = device();
             JsonNode root = json("{\"payload\":{\"service\":\"" + service + "\"}}");
-            new MobileTelemetryApplier(attemptStorage).applyTelemetry(device, root);
+            new MobileTelemetryApplier(attemptStorage, mock(MobilePresenceTracker.class)).applyTelemetry(device, root);
             ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
             verify(attemptStorage, times(1)).updateObject(captor.capture(), any(Request.class));
             assertEquals(service, captor.getValue().getAttributes().get("mobile.service"));
