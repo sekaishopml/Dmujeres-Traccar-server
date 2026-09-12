@@ -34,6 +34,7 @@ public class MobilePresenceService {
     private final ConnectionManager connectionManager;
     private final NotificationManager notificationManager;
     private final MobileTelemetryApplier telemetry;
+    private final MobilePresenceTracker tracker;
     private final Storage storage;
 
     @Inject
@@ -43,17 +44,20 @@ public class MobilePresenceService {
             ConnectionManager connectionManager,
             NotificationManager notificationManager,
             MobileTelemetryApplier telemetry,
+            MobilePresenceTracker tracker,
             Storage storage) {
         this.messages = messages;
         this.journeyRegistry = journeyRegistry;
         this.connectionManager = connectionManager;
         this.notificationManager = notificationManager;
         this.telemetry = telemetry;
+        this.tracker = tracker;
         this.storage = storage;
     }
 
     public PresenceOutcome handlePresence(
-            Device device, MobileEnvelope envelope, JsonNode root, MobileMessage message) {
+            Device device, MobileEnvelope envelope, JsonNode root, MobileMessage message,
+            MobileChannel channel) {
         try {
             messages.completeWithoutPosition(message);
             MobileTelemetryMonitor.TelemetrySnapshot before =
@@ -64,7 +68,10 @@ public class MobilePresenceService {
                     && presence.get("journeyStarted").asBoolean();
             boolean ended = presence.hasNonNull("journeyEnded")
                     && presence.get("journeyEnded").asBoolean();
+            long journeyId = presence.hasNonNull("journeyId") ? presence.get("journeyId").asLong() : 0L;
             if (ended) {
+                // Cierre explícito: única vía legítima a OFFLINE inmediato.
+                tracker.onEnded(device, journeyId);
                 journeyRegistry.end(device.getId());
                 device.getAttributes().put("mobile.journeyId", 0L);
                 device.getAttributes().put("mobile.journeyEndedAt", System.currentTimeMillis());
@@ -76,9 +83,11 @@ public class MobilePresenceService {
             } else if (started) {
                 // El journeyId de inicio ya se persiste vía applyTelemetry (mobile.journeyId
                 // en payload → attributes + storage.updateObject con Columns.Include("attributes")).
-                long journeyId = presence.hasNonNull("journeyId")
-                        ? presence.get("journeyId").asLong() : 0L;
-                journeyRegistry.start(device.getId(), journeyId);
+                // Un started con journeyId viejo (replay tras el cierre) se acepta para
+                // drenar la cola del móvil pero NO reabre la jornada.
+                if (tracker.onStarted(device, journeyId)) {
+                    journeyRegistry.start(device.getId(), journeyId);
+                }
             }
             connectionManager.updateDevice(device.getId(),
                     ended ? Device.STATUS_OFFLINE : Device.STATUS_ONLINE, new Date());

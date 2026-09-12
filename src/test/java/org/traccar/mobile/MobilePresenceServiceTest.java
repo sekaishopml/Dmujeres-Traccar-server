@@ -24,6 +24,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Verifica la lógica de estados del canal de presencia:
@@ -38,6 +39,7 @@ public class MobilePresenceServiceTest {
     private Storage storage;
     private MobileJourneyRegistry journeyRegistry;
     private ConnectionManager connectionManager;
+    private MobilePresenceTracker tracker;
     private MobilePresenceService service;
 
     @BeforeEach
@@ -45,6 +47,7 @@ public class MobilePresenceServiceTest {
         storage = mock(Storage.class);
         journeyRegistry = mock(MobileJourneyRegistry.class);
         connectionManager = mock(ConnectionManager.class);
+        tracker = mock(MobilePresenceTracker.class);
         MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage);
         service = new MobilePresenceService(
                 mock(MobileMessageStore.class),
@@ -52,11 +55,12 @@ public class MobilePresenceServiceTest {
                 connectionManager,
                 mock(NotificationManager.class),
                 telemetry,
+                tracker,
                 storage);
     }
 
     @Test
-    public void testEndedPersistsJourneyResetInDatabase() throws Exception {
+    public void testEndedGoesOfflineThroughTracker() throws Exception {
         Device device = device();
         // journeyId>0 en el payload: applyTelemetry lo persiste primero, y la rama
         // ended debe sobreescribirlo a 0 en BD para evitar la jornada fantasma.
@@ -64,9 +68,11 @@ public class MobilePresenceServiceTest {
                 + "\"battery\":80,\"network\":\"wifi\"}}");
 
         MobilePresenceService.PresenceOutcome outcome =
-                service.handlePresence(device, envelope(), root, message());
+                service.handlePresence(device, envelope(), root, message(), MobileChannel.MQTT);
 
         assertEquals(MobilePresenceService.PresenceOutcome.ACCEPTED, outcome);
+        // Cierre explícito: única vía legítima a OFFLINE inmediato.
+        verify(tracker).onEnded(device, 55L);
         verify(journeyRegistry).end(DEVICE_ID);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
@@ -85,9 +91,10 @@ public class MobilePresenceServiceTest {
         Device device = device();
         JsonNode root = json("{\"payload\":{\"journeyStarted\":true,\"journeyId\":42,"
                 + "\"battery\":90,\"network\":\"mobile\"}}");
+        when(tracker.onStarted(device, 42L)).thenReturn(true);
 
         MobilePresenceService.PresenceOutcome outcome =
-                service.handlePresence(device, envelope(), root, message());
+                service.handlePresence(device, envelope(), root, message(), MobileChannel.MQTT);
 
         assertEquals(MobilePresenceService.PresenceOutcome.ACCEPTED, outcome);
         verify(journeyRegistry).start(DEVICE_ID, 42L);
@@ -100,6 +107,24 @@ public class MobilePresenceServiceTest {
         Device persisted = captor.getValue();
         assertEquals(42L, ((Number) persisted.getAttributes().get("mobile.journeyId")).longValue());
         assertFalse(persisted.getAttributes().containsKey("mobile.journeyEndedAt"));
+        verify(connectionManager).updateDevice(eq(DEVICE_ID), eq(Device.STATUS_ONLINE), any());
+    }
+
+    @Test
+    public void testStaleStartedDrainsWithoutReopening() throws Exception {
+        Device device = device();
+        // Replay de started con journeyId ya cerrado: se acepta (drena la cola
+        // del móvil) pero NO reabre la jornada.
+        JsonNode root = json("{\"payload\":{\"journeyStarted\":true,\"journeyId\":41,"
+                + "\"battery\":90,\"network\":\"mobile\"}}");
+        when(tracker.onStarted(device, 41L)).thenReturn(false);
+
+        MobilePresenceService.PresenceOutcome outcome =
+                service.handlePresence(device, envelope(), root, message(), MobileChannel.MQTT);
+
+        assertEquals(MobilePresenceService.PresenceOutcome.ACCEPTED, outcome);
+        verify(journeyRegistry, never()).start(anyLong(), anyLong());
+        verify(journeyRegistry, never()).end(anyLong());
         verify(connectionManager).updateDevice(eq(DEVICE_ID), eq(Device.STATUS_ONLINE), any());
     }
 

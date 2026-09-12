@@ -27,6 +27,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Date;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
@@ -70,6 +72,13 @@ public class MobileIngestionService {
     private final MobileTelemetryApplier telemetry;
     private final MobilePresenceService presence;
     private final MobileQualityFilter quality;
+    private final MobilePresenceTracker tracker;
+
+    /**
+     * Contadores de resultados por estado ACK desde el arranque (métricas
+     * {@code mobile.stats} del monitor; ver {@link #formatOutcomeStats}).
+     */
+    private final EnumMap<AckStatus, AtomicLong> outcomeCounts = new EnumMap<>(AckStatus.class);
 
     @Inject
     public MobileIngestionService(Config config, ObjectMapper mapper, DeviceLookupService devices,
@@ -77,7 +86,7 @@ public class MobileIngestionService {
             PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager,
             MobileJourneyRegistry journeyRegistry,
             MobileTelemetryApplier telemetry, MobilePresenceService presence,
-            MobileQualityFilter quality) {
+            MobileQualityFilter quality, MobilePresenceTracker tracker) {
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -90,9 +99,58 @@ public class MobileIngestionService {
         this.telemetry = telemetry;
         this.presence = presence;
         this.quality = quality;
+        this.tracker = tracker;
+        for (AckStatus status : AckStatus.values()) {
+            outcomeCounts.put(status, new AtomicLong());
+        }
     }
 
+    /** Entrada MQTT (canal por defecto; preserva la firma usada por el consumer y tests). */
     public CompletionStage<Result> process(byte[] payload, String topicDeviceId) {
+        return process(payload, topicDeviceId, MobileChannel.MQTT);
+    }
+
+    /**
+     * Entrada con canal explícito (el fallback HTTP pasa {@link MobileChannel#HTTP}
+     * para no mover la dimensión MQTT de presencia con tráfico que no la prueba).
+     * Cuenta todos los resultados por AckStatus (métricas).
+     */
+    public CompletionStage<Result> process(byte[] payload, String topicDeviceId, MobileChannel channel) {
+        CompletionStage<Result> inner;
+        try {
+            inner = processInner(payload, topicDeviceId, channel);
+        } catch (RuntimeException error) {
+            LOGGER.error("Mobile ingestion failed before pipeline; leaving for retry", error);
+            inner = CompletableFuture.completedFuture(new Result(AckStatus.PENDING, null));
+        }
+        return inner.thenApply(result -> {
+            outcomeCounts.get(result.status()).incrementAndGet();
+            return result;
+        });
+    }
+
+    /** Foto de contadores de resultados (para métricas y tests). */
+    public Map<AckStatus, Long> getOutcomeCounts() {
+        EnumMap<AckStatus, Long> snapshot = new EnumMap<>(AckStatus.class);
+        outcomeCounts.forEach((status, counter) -> snapshot.put(status, counter.get()));
+        return snapshot;
+    }
+
+    public String formatOutcomeStats() {
+        StringBuilder value = new StringBuilder("outcomes={");
+        boolean first = true;
+        for (AckStatus status : AckStatus.values()) {
+            if (!first) {
+                value.append(' ');
+            }
+            first = false;
+            value.append(status.name().toLowerCase()).append('=')
+                    .append(outcomeCounts.get(status).get());
+        }
+        return value.append('}').toString();
+    }
+
+    private CompletionStage<Result> processInner(byte[] payload, String topicDeviceId, MobileChannel channel) {
         MobileEnvelope envelope = null;
         try {
             envelope = mapper.readValue(payload, MobileEnvelope.class);
@@ -107,10 +165,17 @@ public class MobileIngestionService {
             if (device == null) {
                 return CompletableFuture.completedFuture(new Result(AckStatus.REJECTED, captured));
             }
+            // Telemetría válida de dispositivo conocido: mueve liveness por LLEGADA
+            // (el fixTime puede ser replay de hace horas; la llegada prueba que el
+            // transporte está vivo) y refresca las dimensiones GPS/NETWORK/MQTT/OUTBOX.
+            tracker.onArrival(device, root, channel, "position".equals(captured.getType())
+                    ? parseObservedMs(captured) : -1L);
 
             MobileMessageStore.Result reservation = messages.reserve(
                     device.getId(), captured, canonicalHash(captured));
             if (reservation.reservation() == MobileMessageStore.Reservation.DUPLICATE) {
+                // Reenvío ya procesado: UNA sola vez (no se duplica), ACK que drena.
+                tracker.onSettled(device.getId(), true, channel);
                 return CompletableFuture.completedFuture(new Result(AckStatus.DUPLICATE, captured));
             }
             if (reservation.reservation() == MobileMessageStore.Reservation.REJECTED) {
@@ -127,9 +192,10 @@ public class MobileIngestionService {
                 // Heartbeat o señal de inicio/fin de jornada: cambia el estado en tiempo real
                 // y actualiza telemetría SIN persistir posiciones ficticias.
                 MobilePresenceService.PresenceOutcome outcome =
-                        presence.handlePresence(device, captured, root, message);
+                        presence.handlePresence(device, captured, root, message, channel);
                 AckStatus status = outcome == MobilePresenceService.PresenceOutcome.ACCEPTED
                         ? AckStatus.ACCEPTED : AckStatus.PENDING;
+                tracker.onSettled(device.getId(), status == AckStatus.ACCEPTED, channel);
                 return CompletableFuture.completedFuture(new Result(status, captured));
             }
 
@@ -157,6 +223,7 @@ public class MobileIngestionService {
                     LOGGER.error("Failed to finalize duplicate mobile message", completionError);
                     return CompletableFuture.completedFuture(new Result(AckStatus.PENDING, captured));
                 }
+                tracker.onSettled(device.getId(), true, channel);
                 return CompletableFuture.completedFuture(new Result(AckStatus.DUPLICATE, captured));
             }
             if (verdict == MobileQualityFilter.Verdict.REJECT) {
@@ -214,13 +281,20 @@ public class MobileIngestionService {
                             }
                             JsonNode telemetryPayload = root.path("payload");
                             if (telemetryPayload.hasNonNull("journeyId")) {
-                                journeyRegistry.start(device.getId(),
-                                        telemetryPayload.get("journeyId").asLong());
+                                long journeyId = telemetryPayload.get("journeyId").asLong();
+                                // Anti-resurrección: un replay con journeyId viejo (anterior
+                                // al último cierre) se ingresa igual pero NO reabre jornada.
+                                if (tracker.shouldReopen(
+                                        device.getId(), device.getUniqueId(), journeyId)) {
+                                    journeyRegistry.start(device.getId(), journeyId);
+                                }
                             }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             connectionManager.updateDevice(true, device);
-                            // Fase B: ya persistido atómicamente (INSERT tc_positions + UPDATE tc_mobile_messages con positionId)
-                            // no llamar a completeWithoutPosition que pondría positionId=0 y rompería el link.
+                            // Fase B: ya persistido atómicamente (INSERT tc_positions + UPDATE
+                            // tc_mobile_messages con positionId) no llamar a completeWithoutPosition
+                            // que pondría positionId=0 y rompería el link.
+                            tracker.onSettled(device.getId(), true, channel);
                             return new Result(AckStatus.ACCEPTED, captured);
                         }
                         if (result2.filtered()) {
@@ -236,8 +310,11 @@ public class MobileIngestionService {
                             }
                             JsonNode telemetryPayload = root.path("payload");
                             if (telemetryPayload.hasNonNull("journeyId")) {
-                                journeyRegistry.start(device.getId(),
-                                        telemetryPayload.get("journeyId").asLong());
+                                long journeyId = telemetryPayload.get("journeyId").asLong();
+                                if (tracker.shouldReopen(
+                                        device.getId(), device.getUniqueId(), journeyId)) {
+                                    journeyRegistry.start(device.getId(), journeyId);
+                                }
                             }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             connectionManager.updateDevice(true, device);
@@ -247,6 +324,7 @@ public class MobileIngestionService {
                                 LOGGER.error("Failed to finalize filtered mobile message", completionError);
                                 return new Result(AckStatus.PENDING, captured);
                             }
+                            tracker.onSettled(device.getId(), true, channel);
                             return new Result(AckStatus.ACCEPTED, captured);
                         }
                         return new Result(AckStatus.PENDING, captured);
@@ -301,22 +379,34 @@ public class MobileIngestionService {
     }
 
     /**
-     * LWT del broker: no es un mensaje válido (sequence 0) ni aporta telemetría. Solo marca
-     * el device offline —mismo patrón que el fin de jornada en {@link MobilePresenceService}—
-     * sin reservar mensaje, sin posición y sin WARN. El evento deviceOffline lo emite
-     * ConnectionManager solo si el estado realmente cambia. Se pasa time=null para no mover
-     * lastUpdate (no hay datos frescos) y no desarmar el cooldown por device de
-     * MobileSilenceMonitor con una "recuperación" fantasma.
+     * LWT del broker: SESIÓN MQTT perdida inesperadamente, NO "teléfono apagado".
+     * Un handover WiFi→datos, un reintento con takeover o Doze disparan el will
+     * mientras el teléfono sigue capturando en su cola local: marcar OFFLINE aquí
+     * era el falso OFFLINE más común. Con jornada activa la presencia pasa a
+     * SUSPECT (el temporizador dirá OFFLINE solo tras 10 min sin nada) y el core
+     * se refresca ONLINE sin mover lastUpdate (sin "recuperación" fantasma).
+     * Sin jornada se conserva el OFFLINE. Sin reserva, sin posición y sin WARN.
      */
     private void handleLwtHeartbeat(MobileEnvelope envelope, String topicDeviceId) {
-        LOGGER.debug("Mobile LWT heartbeat from device {} ({}); marking offline",
+        LOGGER.debug("Mobile LWT heartbeat from device {} ({}); session lost, not phone off",
                 topicDeviceId, envelope.getMessageId());
         Device device = devices.lookup(new String[] {topicDeviceId});
         if (device == null) {
             return;
         }
-        connectionManager.updateDevice(device.getId(), Device.STATUS_OFFLINE, null);
+        boolean journeyActive = tracker.onLwt(device);
+        connectionManager.updateDevice(device.getId(),
+                journeyActive ? Device.STATUS_ONLINE : Device.STATUS_OFFLINE, null);
         connectionManager.updateDevice(true, device);
+    }
+
+    /** observedAt del envelope a epoch ms (-1 si ilegible; el validador ya lo exigió ISO). */
+    private static long parseObservedMs(MobileEnvelope envelope) {
+        try {
+            return Instant.parse(envelope.getObservedAt()).toEpochMilli();
+        } catch (Exception error) {
+            return -1L;
+        }
     }
 
     public static Position toPosition(MobileEnvelope envelope, long deviceId) {

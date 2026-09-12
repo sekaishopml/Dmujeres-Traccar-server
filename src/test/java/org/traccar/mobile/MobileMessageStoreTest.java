@@ -7,6 +7,8 @@ import org.traccar.storage.Storage;
 import org.traccar.storage.StorageException;
 import org.traccar.storage.query.Request;
 
+import javax.sql.DataSource;
+
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,7 +26,8 @@ public class MobileMessageStoreTest {
         MobileMessage existing = message("processing");
         when(storage.getObjectsStream(eq(MobileMessage.class), any(Request.class))).thenReturn(Stream.of(existing));
 
-        MobileMessageStore.Result result = new MobileMessageStore(storage).reserve(7, envelope(), "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
+        MobileMessageStore.Result result = new MobileMessageStore(storage, mock(DataSource.class))
+                .reserve(7, envelope(), "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
 
         assertEquals(MobileMessageStore.Reservation.PROCESSING, result.reservation());
     }
@@ -37,7 +40,8 @@ public class MobileMessageStoreTest {
                 .thenReturn(Stream.empty(), Stream.empty(), Stream.of(existing));
         when(storage.addObject(any(), any())).thenThrow(new StorageException("duplicate key"));
 
-        MobileMessageStore.Result result = new MobileMessageStore(storage).reserve(7, envelope(), "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
+        MobileMessageStore.Result result = new MobileMessageStore(storage, mock(DataSource.class))
+                .reserve(7, envelope(), "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
 
         assertEquals(MobileMessageStore.Reservation.DUPLICATE, result.reservation());
     }

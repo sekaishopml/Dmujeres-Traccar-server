@@ -62,6 +62,19 @@
   <entry key="mobile.filter.accuracyReject">500.0</entry>
   <entry key="mobile.filter.maxSpeedKn">140.0</entry>
 
+  <!-- Máquina de presencia del canal móvil (MobilePresenceTracker): ONLINE con dato
+       hace menos de suspectSeconds, SUSPECT hasta offlineSeconds, OFFLINE más allá
+       o al cerrar la jornada. heartbeatSeconds = expectativa de cadencia (la app
+       envía heartbeat cada 60 s sin fix y posiciones cada ~10 s); suspect cubre
+       handover + reintentos; offline coincide con status.timeout (def. 600 s).
+       gpsStaleSeconds: sin fixes aunque fluya presencia → GPS STALE (no OFFLINE).
+       mqttGraceSeconds: sin publishes MQTT con jornada activa → sesión caída. -->
+  <entry key="mobile.presence.heartbeatSeconds">180</entry>
+  <entry key="mobile.presence.suspectSeconds">300</entry>
+  <entry key="mobile.presence.offlineSeconds">600</entry>
+  <entry key="mobile.presence.gpsStaleSeconds">600</entry>
+  <entry key="mobile.presence.mqttGraceSeconds">180</entry>
+
   <!-- Logging -->
   <entry key="logger.level">info</entry>
 

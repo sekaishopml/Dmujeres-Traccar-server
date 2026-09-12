@@ -81,6 +81,16 @@ public class Event extends Message {
     public static final String TYPE_MOBILE_POSSIBLE_POWER_OFF = "mobilePossiblePowerOff";
     public static final String TYPE_MOBILE_STALLED = "mobileStalled";
     public static final String TYPE_MOBILE_DIAGNOSTICS = "mobileDiagnostics";
+    /**
+     * Transiciones de la máquina de presencia (MobilePresenceTracker): el teléfono
+     * NO se declara OFFLINE por un simple silencio de 2 min (eso era el falso
+     * OFFLINE: handover, reintento MQTT, buffering). SUSPECT a los 5 min sin
+     * telemetría con jornada activa, OFFLINE a los 10 min, RECOVERED al volver
+     * tráfico válido. Llevan atributos presenceFrom/presenceTo/reason/silenceMinutes.
+     */
+    public static final String TYPE_MOBILE_PRESENCE_SUSPECT = "mobilePresenceSuspect";
+    public static final String TYPE_MOBILE_PRESENCE_OFFLINE = "mobilePresenceOffline";
+    public static final String TYPE_MOBILE_PRESENCE_RECOVERED = "mobilePresenceRecovered";
 
     private Date eventTime;
 

@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.traccar.api.BaseResource;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
+import org.traccar.mobile.MobileChannel;
 import org.traccar.mobile.MobileIngestionService;
 import org.traccar.mobile.MobileIngestionService.AckStatus;
 
@@ -112,7 +113,9 @@ public class MobileHttpResource extends BaseResource {
                 }
                 try {
                     byte[] payload = mapper.writeValueAsBytes(node);
-                    AckStatus status = ingestion.process(payload, deviceId)
+                    // Canal HTTP explícito: comparte validación/idempotencia con MQTT
+                    // pero no mueve la dimensión MQTT de presencia.
+                    AckStatus status = ingestion.process(payload, deviceId, MobileChannel.HTTP)
                             .thenApply(result -> result.status()).toCompletableFuture().join();
                     acks.add(new Ack(deviceId, node.path("messageId").asText(null),
                             node.path("sequence").asLong(0), status.name().toLowerCase()));

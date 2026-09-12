@@ -13,46 +13,60 @@ import org.traccar.storage.query.Columns;
 import org.traccar.storage.query.Condition;
 import org.traccar.storage.query.Request;
 
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Monitor de silencio: detecta dispositivos móviles con jornada activa que dejaron de
- * comunicarse. Según el último estado de red conocido, crea:
- * - mobileNetworkLost: si la última red fue wifi o mobile (el teléfono perdió conexión)
- * - mobilePossiblePowerOff: si la última red era none o no hay datos (teléfono apagado)
+ * Evaluador de presencia: cada 30 s recorre los dispositivos con jornada activa
+ * (más los que el tracker aún sigue con presencia viva) y aplica
+ * {@link MobilePresenceTracker#evaluate}. Las transiciones ONLINE/SUSPECT/OFFLINE
+ * las decide el tracker con eventos dedicados; este monitor conserva el chequeo
+ * STALLED (datos sin movimiento) y la marca {@code mobile.degraded} para el panel.
  *
- * Threshold: 2 minutos (el teléfono no puede avisar que se quedó sin red,
- * así que el servidor lo detecta por silencio).
+ * <p>Se eliminó el hair-trigger anterior (evento a los 2 min de silencio por
+ * lastUpdate): eso declaraba problemas ante cualquier handover, reintento MQTT o
+ * buffering offline. Ahora el silencio primero es SUSPECT (5 min) y solo después
+ * OFFLINE (10 min), con motivo (TIMEOUT/SESSION_LOST/JOURNEY_ENDED) y recuperación
+ * explícita. Ver {@link MobilePresenceTracker}.
  */
 @Singleton
 public class MobileSilenceMonitor implements LifecycleObject {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MobileSilenceMonitor.class);
-    private static final long SILENCE_THRESHOLD_MS = 2 * 60_000L;
     private static final long COOLDOWN_MS = 15 * 60_000L;
     /** Jornada activa con mensajes pero sin coordenadas nuevas >= 15 min. */
     private static final long STALLED_THRESHOLD_MS = 15 * 60_000L;
+    /** Resumen de métricas mobile.stats cada ~10 min (cada 20 ticks). */
+    private static final int STATS_EVERY_TICKS = 20;
 
     private final Storage storage;
     private final NotificationManager notificationManager;
     private final MobileJourneyRegistry journeyRegistry;
     private final MobileQualityFilter qualityFilter;
+    private final MobilePresenceTracker tracker;
+    private final MobileIngestionService ingestion;
     private ScheduledExecutorService scheduler;
 
-    private final ConcurrentHashMap<Long, Long> lastEventByDevice = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Long> lastStalledByDevice = new ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, Long> lastStalledByDevice =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private long tickCount;
 
     @Inject
     public MobileSilenceMonitor(Storage storage, NotificationManager notificationManager,
-            MobileJourneyRegistry journeyRegistry, MobileQualityFilter qualityFilter) {
+            MobileJourneyRegistry journeyRegistry, MobileQualityFilter qualityFilter,
+            MobilePresenceTracker tracker, MobileIngestionService ingestion) {
         this.storage = storage;
         this.notificationManager = notificationManager;
         this.journeyRegistry = journeyRegistry;
         this.qualityFilter = qualityFilter;
+        this.tracker = tracker;
+        this.ingestion = ingestion;
     }
 
     @Override
@@ -63,8 +77,7 @@ public class MobileSilenceMonitor implements LifecycleObject {
             return t;
         });
         scheduler.scheduleAtFixedRate(this::check, 30, 30, TimeUnit.SECONDS);
-        LOGGER.info("Mobile silence monitor started (threshold={}s, cooldown={}s)",
-                SILENCE_THRESHOLD_MS / 1000, COOLDOWN_MS / 1000);
+        LOGGER.info("Mobile presence evaluator started (period=30s)");
     }
 
     @Override
@@ -77,9 +90,11 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private void check() {
         try {
             long now = System.currentTimeMillis();
-            // Solo consultar los dispositivos con jornada activa (registry en memoria),
-            // no cargar toda la tabla tc_devices cada ciclo.
-            for (Long deviceId : journeyRegistry.activeDeviceIds()) {
+            // Unión: jornadas activas + presencias aún seguidas (cubre el caso de
+            // vista ONLINE con registry inactivo, que el temporizador degrada solo).
+            Set<Long> deviceIds = new HashSet<>(journeyRegistry.activeDeviceIds());
+            deviceIds.addAll(tracker.trackedIds());
+            for (Long deviceId : deviceIds) {
                 Device device;
                 try {
                     device = storage.getObject(Device.class, new Request(
@@ -89,54 +104,25 @@ public class MobileSilenceMonitor implements LifecycleObject {
                     LOGGER.warn("Silence monitor: failed to load device {}", deviceId, lookupError);
                     continue;
                 }
-                if (device == null || device.getLastUpdate() == null) continue;
-
-                long lastUpdateMs = device.getLastUpdate().getTime();
-                if (now - lastUpdateMs < SILENCE_THRESHOLD_MS) {
-                    // Recuperación: si antes se disparó un evento de silencio para este
-                    // dispositivo y ya volvieron los datos frescos, limpiar la degradación.
-                    if (lastEventByDevice.remove(deviceId) != null) {
-                        persistDegraded(device, false);
-                    }
-                    checkStalled(device, now);
+                if (device == null) {
                     continue;
                 }
-
-                Long lastEvent = lastEventByDevice.get(deviceId);
-                if (lastEvent != null && now - lastEvent < COOLDOWN_MS) continue;
-
-                int battery = intAttr(device, "mobile.battery");
-                String gps = strAttr(device, "mobile.gps");
-                String network = strAttr(device, "mobile.network");
-
-                // Determinar tipo de evento según la última red conocida:
-                // - Si la última red fue wifi o mobile → el teléfono tenía conexión y la perdió
-                // - Si la última red era none o no hay datos → posible apagado o sin señal desde hace rato
-                String eventType;
-                if (network != null && !"none".equals(network)) {
-                    eventType = Event.TYPE_MOBILE_NETWORK_LOST;
-                } else {
-                    eventType = Event.TYPE_MOBILE_POSSIBLE_POWER_OFF;
+                MobilePresenceTracker.Transition transition = tracker.evaluate(device, now);
+                if (transition.changed() && (transition.to() == MobilePresenceTracker.PresenceState.SUSPECT
+                        || transition.to() == MobilePresenceTracker.PresenceState.OFFLINE)) {
+                    // Compatibilidad con el panel (SIN SEÑAL): degradado mientras no
+                    // haya presencia sana. La recuperación la limpia el applier con
+                    // telemetría sana en el mismo UPDATE del mensaje.
+                    persistDegraded(device, true);
                 }
-
-                Event event = new Event(eventType, deviceId);
-                event.getAttributes().put("mobileSeverity", "warning");
-                event.getAttributes().put("lastBattery", battery);
-                event.getAttributes().put("silenceMinutes", (now - lastUpdateMs) / 60_000);
-                if (gps != null) event.getAttributes().put("gps", gps);
-                if (network != null) event.getAttributes().put("network", network);
-
-                try {
-                    notificationManager.updateEvents(Collections.singletonMap(event, null));
-                } finally {
-                    lastEventByDevice.put(deviceId, now);
+                if (journeyRegistry.isActive(deviceId)) {
+                    checkStalled(device, now);
                 }
-                // Dispositivo con jornada activa en silencio → marcar degradado en BD
-                // (la recuperación se persiste al volver datos frescos o por una
-                // presencia sana vía MobileTelemetryApplier).
-                persistDegraded(device, true);
-                LOGGER.info("Silence event created for device {} type={} ({} min, battery={}%, network={})",
-                        device.getUniqueId(), eventType, (now - lastUpdateMs) / 60_000, battery, network);
+            }
+            if (++tickCount % STATS_EVERY_TICKS == 0) {
+                List<Long> active = new ArrayList<>(journeyRegistry.activeDeviceIds());
+                LOGGER.info("mobile.stats activeJourneys={} {} {}",
+                        active.size(), ingestion.formatOutcomeStats(), tracker.formatStats());
             }
         } catch (Exception error) {
             LOGGER.warn("Mobile silence monitor check failed", error);
@@ -196,11 +182,5 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private static String strAttr(Device device, String key) {
         Object v = device.getAttributes().get(key);
         return v != null ? v.toString() : null;
-    }
-
-    private static int intAttr(Device device, String key) {
-        Object v = device.getAttributes().get(key);
-        if (v instanceof Number) return ((Number) v).intValue();
-        try { return Integer.parseInt(v.toString()); } catch (Exception e) { return -1; }
     }
 }

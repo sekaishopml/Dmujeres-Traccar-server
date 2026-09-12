@@ -25,9 +25,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * LWT del broker como offline + throttle de WARNs de validación.
+ * LWT del broker como pérdida de SESIÓN (no "teléfono apagado") + throttle de
+ * WARNs de validación.
  * - El will (messageId "lwt-&lt;now&gt;", sequence 0, presence network=none) llega como
- *   publish normal al morir el TCP en Doze: debe marcar offline sin persistir ni WARN.
+ *   publish normal al morir el TCP en Doze: con jornada activa la presencia pasa a
+ *   SUSPECT vía tracker (nunca directo a OFFLINE: un handover dispara LWT y el
+ *   teléfono sigue capturando) y el core se refresca ONLINE sin mover lastUpdate.
+ * - Sin jornada se conserva el OFFLINE.
  * - Los rechazos genuinos (sequence&lt;=0 no-LWT, envelope roto) solo loguean la 1ª vez
  *   y cada 100.
  * - El validador sigue rechazando sequence 0 (no se debilita para el no-LWT).
@@ -82,14 +86,17 @@ public class MobileLwtThrottleTest {
     }
 
     @Test
-    public void testLwtMarksOfflineWithoutPersisting() throws Exception {
+    public void testLwtWithActiveJourneyGoesSuspectNotOffline() throws Exception {
         Device device = device();
         DeviceLookupService devices = mock(DeviceLookupService.class);
         when(devices.lookup(any(String[].class))).thenReturn(device);
         ConnectionManager connectionManager = mock(ConnectionManager.class);
         MobileMessageStore messages = mock(MobileMessageStore.class);
         MobileAtomicPersistence atomic = mock(MobileAtomicPersistence.class);
-        MobileIngestionService service = service(devices, connectionManager, messages, atomic);
+        MobilePresenceTracker tracker = mock(MobilePresenceTracker.class);
+        // Jornada activa: la sesión se perdió, el teléfono no necesariamente.
+        when(tracker.onLwt(any(Device.class))).thenReturn(true);
+        MobileIngestionService service = service(devices, connectionManager, messages, atomic, tracker);
 
         byte[] payload = new ObjectMapper().writeValueAsBytes(lwtMap("lwt-1725000000000"));
         MobileIngestionService.Result result =
@@ -97,19 +104,27 @@ public class MobileLwtThrottleTest {
 
         assertEquals(MobileIngestionService.AckStatus.ACCEPTED, result.status());
         assertNull(result.envelope());
-        verify(connectionManager).updateDevice(eq(DATABASE_ID), eq(Device.STATUS_OFFLINE), any());
+        verify(tracker).onLwt(any(Device.class));
+        // El core se refresca ONLINE SIN mover lastUpdate (time=null): no hay
+        // "recuperación" fantasma y el barrido UNKNOWN sigue a 10 min. El falso
+        // OFFLINE directo desaparece: lo decide el temporizador (SUSPECT→OFFLINE).
+        verify(connectionManager).updateDevice(eq(DATABASE_ID), eq(Device.STATUS_ONLINE), eq(null));
         verify(connectionManager).updateDevice(eq(true), any(Device.class));
+        verify(connectionManager, never()).updateDevice(eq(DATABASE_ID), eq(Device.STATUS_OFFLINE), any());
         verify(messages, never()).reserve(anyLong(), any(), any());
         verify(atomic, never()).claim(any(), anyLong());
     }
 
     @Test
-    public void testLwtSequenceZeroPresenceWithoutPrefixMarksOffline() throws Exception {
+    public void testLwtWithoutJourneyKeepsOffline() throws Exception {
         DeviceLookupService devices = mock(DeviceLookupService.class);
         when(devices.lookup(any(String[].class))).thenReturn(device());
         ConnectionManager connectionManager = mock(ConnectionManager.class);
         MobileMessageStore messages = mock(MobileMessageStore.class);
-        MobileIngestionService service = service(devices, connectionManager, messages, null);
+        MobilePresenceTracker tracker = mock(MobilePresenceTracker.class);
+        // Sin jornada: no hay presencia que sospechar, se conserva OFFLINE.
+        when(tracker.onLwt(any(Device.class))).thenReturn(false);
+        MobileIngestionService service = service(devices, connectionManager, messages, null, tracker);
 
         byte[] payload = new ObjectMapper().writeValueAsBytes(lwtMap("01J00000000000000000000000"));
         MobileIngestionService.Result result =
@@ -117,7 +132,7 @@ public class MobileLwtThrottleTest {
 
         assertEquals(MobileIngestionService.AckStatus.ACCEPTED, result.status());
         assertNull(result.envelope());
-        verify(connectionManager).updateDevice(eq(DATABASE_ID), eq(Device.STATUS_OFFLINE), any());
+        verify(connectionManager).updateDevice(eq(DATABASE_ID), eq(Device.STATUS_OFFLINE), eq(null));
         verify(messages, never()).reserve(anyLong(), any(), any());
     }
 
@@ -127,7 +142,8 @@ public class MobileLwtThrottleTest {
         when(devices.lookup(any(String[].class))).thenReturn(null);
         ConnectionManager connectionManager = mock(ConnectionManager.class);
         MobileMessageStore messages = mock(MobileMessageStore.class);
-        MobileIngestionService service = service(devices, connectionManager, messages, null);
+        MobilePresenceTracker tracker = mock(MobilePresenceTracker.class);
+        MobileIngestionService service = service(devices, connectionManager, messages, null, tracker);
 
         byte[] payload = new ObjectMapper().writeValueAsBytes(lwtMap("lwt-1725000000000"));
         MobileIngestionService.Result result =
@@ -136,6 +152,7 @@ public class MobileLwtThrottleTest {
         assertEquals(MobileIngestionService.AckStatus.ACCEPTED, result.status());
         assertNull(result.envelope());
         verify(connectionManager, never()).updateDevice(anyLong(), any(), any());
+        verify(tracker, never()).onLwt(any(Device.class));
         verify(messages, never()).reserve(anyLong(), any(), any());
     }
 
@@ -151,7 +168,7 @@ public class MobileLwtThrottleTest {
 
     @Test
     public void testBrokenEnvelopesAreCountedWithoutException() {
-        MobileIngestionService service = service(null, null, null, null);
+        MobileIngestionService service = service(null, null, null, null, null);
         for (int i = 0; i < 250; i++) {
             MobileIngestionService.Result result =
                     service.process("not-json".getBytes(), DEVICE_ID).toCompletableFuture().join();
@@ -163,7 +180,7 @@ public class MobileLwtThrottleTest {
 
     @Test
     public void testNonLwtZeroSequenceCountsAsInvalid() throws Exception {
-        MobileIngestionService service = service(null, null, null, null);
+        MobileIngestionService service = service(null, null, null, null, null);
         Instant now = Instant.now();
         String json = "{\"schema\":1,\"type\":\"position\",\"messageId\":\"01J00000000000000000000000\","
                 + "\"deviceId\":\"" + DEVICE_ID + "\",\"sequence\":0,"
@@ -177,10 +194,10 @@ public class MobileLwtThrottleTest {
 
     private static MobileIngestionService service(
             DeviceLookupService devices, ConnectionManager connectionManager,
-            MobileMessageStore messages, MobileAtomicPersistence atomic) {
+            MobileMessageStore messages, MobileAtomicPersistence atomic, MobilePresenceTracker tracker) {
         return new MobileIngestionService(
                 null, new ObjectMapper(), devices, messages, atomic,
-                null, null, connectionManager, null, null, null, null);
+                null, null, connectionManager, null, null, null, null, tracker);
     }
 
     private static Device device() {

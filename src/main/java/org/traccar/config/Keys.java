@@ -66,6 +66,40 @@ public final class Keys {
     public static final ConfigKey<Double> MOBILE_FILTER_MAX_SPEED_KN = new DoubleConfigKey(
             "mobile.filter.maxSpeedKn", List.of(KeyType.CONFIG), 140.0);
 
+    /**
+     * Máquina de presencia del canal móvil (MobilePresenceTracker).
+     *
+     * <p>Evaluación de la propuesta heartbeat 3 min / suspect 5 min / offline 10 min:
+     * la app envía heartbeat de presencia cada 60 s (sin fix) y posiciones cada ~10 s,
+     * con keepalive MQTT 45 s y backoff de reconexión con techo 5 min. Por tanto:
+     * <ul>
+     *   <li>heartbeat 180 s: expectativa con 3x de margen sobre la cadencia del
+     *   cliente; se usa para la métrica de overdue y como base documentada.</li>
+     *   <li>suspect 300 s: cubre handover WiFi↔datos + una racha de reconexión +
+     *   2 heartbeats perdidos, sin declarar OFFLINE.</li>
+     *   <li>offline 600 s: coincide con status.timeout por defecto (600 s), de modo
+     *   que el estado core UNKNOWN y la presencia OFFLINE convergen; 2x suspect.</li>
+     *   <li>gpsStale 600 s: los fixes llegan cada 10-60 s; 10x de margen evita
+     *   flapping en Doze sin enmascarar un GNSS muerto real.</li>
+     *   <li>mqttGrace 180 s: una sesión viva produce >=1 publish/min (heartbeat);
+     *   3x de margen antes de declararla caída sin LWT.</li>
+     * </ul>
+     */
+    public static final ConfigKey<Integer> MOBILE_PRESENCE_HEARTBEAT_SECONDS = new IntegerConfigKey(
+            "mobile.presence.heartbeatSeconds", List.of(KeyType.CONFIG), 180);
+
+    public static final ConfigKey<Integer> MOBILE_PRESENCE_SUSPECT_SECONDS = new IntegerConfigKey(
+            "mobile.presence.suspectSeconds", List.of(KeyType.CONFIG), 300);
+
+    public static final ConfigKey<Integer> MOBILE_PRESENCE_OFFLINE_SECONDS = new IntegerConfigKey(
+            "mobile.presence.offlineSeconds", List.of(KeyType.CONFIG), 600);
+
+    public static final ConfigKey<Integer> MOBILE_PRESENCE_GPS_STALE_SECONDS = new IntegerConfigKey(
+            "mobile.presence.gpsStaleSeconds", List.of(KeyType.CONFIG), 600);
+
+    public static final ConfigKey<Integer> MOBILE_PRESENCE_MQTT_GRACE_SECONDS = new IntegerConfigKey(
+            "mobile.presence.mqttGraceSeconds", List.of(KeyType.CONFIG), 180);
+
     public static final ConfigKey<String> EMQX_API_URL = new StringConfigKey(
             "emqx.apiUrl", List.of(KeyType.CONFIG), "http://127.0.0.1:18083");
 

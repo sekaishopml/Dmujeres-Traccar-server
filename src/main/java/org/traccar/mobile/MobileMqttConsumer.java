@@ -179,7 +179,8 @@ public class MobileMqttConsumer implements LifecycleObject {
     }
 
     private CompletionStage<Void> processSerial(Mqtt5Publish publish, String topicDeviceId) {
-        return ingestion.process(publish.getPayloadAsBytes(), topicDeviceId)
+        // Canal explícito: solo el tráfico MQTT mueve la dimensión MQTT de presencia.
+        return ingestion.process(publish.getPayloadAsBytes(), topicDeviceId, MobileChannel.MQTT)
                 .thenCompose(result -> {
                     if (result.status() == AckStatus.PENDING) {
                         LOGGER.warn("Mobile message pending; leaving publish unacknowledged: {}",
