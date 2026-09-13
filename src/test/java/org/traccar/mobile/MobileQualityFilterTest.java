@@ -20,11 +20,15 @@ public class MobileQualityFilterTest {
     private static final double MAX_SPEED_KN = 140.0;
 
     @Test
-    public void testRejectAbsurdAccuracy() {
+    public void testAbsurdAccuracyIsHiddenNotRejected() {
+        // REGRESSION: accuracy > reject se CONSERVA marcada (valid=false), no se
+        // tira: un fix grueso indoor sigue siendo evidencia (§9). El móvil ya no
+        // necesita borrar con rejected porque el servidor acepta la fila.
         Position position = position(0.0, 0.0, 1_700_000_000_000L, 600.0);
         MobileQualityFilter.Verdict verdict =
                 MobileQualityFilter.assess(position, null, HIDE, REJECT, MAX_SPEED_KN);
-        assertEquals(MobileQualityFilter.Verdict.REJECT, verdict);
+        assertEquals(MobileQualityFilter.Verdict.HIDE, verdict);
+        assertFalse(position.getValid());
     }
 
     @Test

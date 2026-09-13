@@ -34,7 +34,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>accuracy desconocida ({@code <= 0}, toPosition no llama setAccuracy si es null)
  *       → nunca se rechaza; solo se marca {@code valid=false} si además hay salto de velocidad.</li>
- *   <li>accuracy &gt; reject (default 500 m) → REJECT (absurdo; el móvil borra con rejected).</li>
+ *   <li>accuracy &gt; reject (default 500 m) → {@code valid=false}, se conserva
+ *       marcado (HIDE, no REJECT): un fix grueso indoor sigue siendo evidencia
+ *       de presencia/ruta y el panel lo muestra en modo honesto; tirarlo abría
+ *       huecos artificiales (§9: lowQuality se conserva, no se elimina).</li>
  *   <li>accuracy en (hide, reject] (default 80-500 m) → {@code valid=false}, se conserva marcado.</li>
  *   <li>velocidad implícita distance(last, position)/dtFixtime &gt; maxSpeedKn (default 140 kn)
  *       con dt &gt; 0 → {@code valid=false}, nunca REJECT (el replay legítimo no se tira).</li>
@@ -66,7 +69,8 @@ public class MobileQualityFilter {
     /**
      * Evaluación pura: no toca Storage, solo decide sobre los dos fixes y muta
      * {@code position.setValid(false)} cuando corresponde conservar marcado.
-     * REJECT no muta (no hay fila que conservar).
+     * REJECT queda reservado (veredicto defensivo; hoy ninguna regla lo emite:
+     * hasta el absurdo se conserva marcado para no abrir huecos).
      */
     public static Verdict assess(
             Position position, Position lastByFixtime,
@@ -78,7 +82,8 @@ public class MobileQualityFilter {
         boolean unknown = accuracy <= 0;
 
         if (!unknown && accuracy > accuracyReject) {
-            return Verdict.REJECT;
+            position.setValid(false);
+            return Verdict.HIDE;
         }
 
         boolean hide = false;

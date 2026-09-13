@@ -227,6 +227,8 @@ public class MobileIngestionService {
                 return CompletableFuture.completedFuture(new Result(AckStatus.DUPLICATE, captured));
             }
             if (verdict == MobileQualityFilter.Verdict.REJECT) {
+                // Rama defensiva (hoy ninguna regla emite REJECT: hasta el absurdo
+                // se conserva marcado). Si algún día se rechaza, NACK terminal.
                 try {
                     messages.reject(message);
                 } catch (Exception completionError) {

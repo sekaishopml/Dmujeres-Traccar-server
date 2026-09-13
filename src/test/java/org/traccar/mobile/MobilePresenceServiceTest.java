@@ -130,6 +130,21 @@ public class MobilePresenceServiceTest {
     }
 
     @Test
+    public void testTelemetryApplierPersistsSpeedSourceAndRejectBreakdown() throws Exception {
+        Device device = device();
+        JsonNode root = json("{\"payload\":{\"network\":\"wifi\",\"speedSource\":\"implied\","
+                + "\"rejectBreakdown\":\"implied:10|rule:5\"}}");
+
+        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
+
+        ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
+        verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
+        Device persisted = captor.getValue();
+        assertEquals("implied", persisted.getAttributes().get("mobile.speedSource"));
+        assertEquals("implied:10|rule:5", persisted.getAttributes().get("mobile.rejectBreakdown"));
+    }
+
+    @Test
     public void testHealthyTelemetryDecision() {
         assertTrue(MobileTelemetryApplier.isHealthyTelemetry("wifi", false, 0));
         assertTrue(MobileTelemetryApplier.isHealthyTelemetry("mobile", true, 1999));

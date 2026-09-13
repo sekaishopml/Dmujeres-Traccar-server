@@ -124,6 +124,16 @@ public class MobileTelemetryApplier {
         if (telemetry.hasNonNull("signal")) {
             device.getAttributes().put("mobile.signal", telemetry.get("signal").asInt());
         }
+        // Origen de la velocidad del fix ("doppler"|"implied"|"unknown"): un 0
+        // con unknown es "no se sabe", no parado confirmado (caso Joseph).
+        if (telemetry.hasNonNull("speedSource")) {
+            device.getAttributes().put("mobile.speedSource", telemetry.get("speedSource").asText());
+        }
+        // Desglose de rechazos del filtro ("accuracy:3|implied:10|..."): permite
+        // distinguir "GPS apagado" de "filtro mata todo" sin acceso al teléfono.
+        if (telemetry.hasNonNull("rejectBreakdown")) {
+            device.getAttributes().put("mobile.rejectBreakdown", telemetry.get("rejectBreakdown").asText());
+        }
         // Causa de pérdida de red reportada por la app (ver NET_CAUSE_WHITELIST).
         // Cada clave solo se persiste si viene en el payload; mobile.causeAt
         // (epoch ms del momento de recepción) solo se toca si vino al menos

@@ -53,6 +53,18 @@ public class MobileEnvelopeValidatorTest {
                 () -> MobileEnvelopeValidator.validate(envelope, "device-123", NOW));
     }
 
+    @Test
+    public void testAcceptsHoursOldReplay() {
+        // REGRESSION ADMIN: replay offline de 6 h con fix válido NO se rechaza
+        // por antiguo (el límite es 7 d, no horas). Timestamps históricos intactos.
+        for (String observedAt : new String[] {
+                "2026-08-12T11:00:00Z", "2026-08-12T06:00:00Z", "2026-08-11T12:00:00Z"}) {
+            MobileEnvelope envelope = valid();
+            envelope.setObservedAt(observedAt);
+            assertDoesNotThrow(() -> MobileEnvelopeValidator.validate(envelope, "device-123", NOW));
+        }
+    }
+
     private static MobileEnvelope valid() {
         MobileEnvelope envelope = new MobileEnvelope();
         envelope.setSchema(1);
