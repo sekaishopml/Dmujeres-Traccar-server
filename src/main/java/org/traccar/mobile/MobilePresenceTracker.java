@@ -97,6 +97,8 @@ public class MobilePresenceTracker {
     public static final String ATTR_MQTT = "mobile.mqttState";
     public static final String ATTR_OUTBOX = "mobile.outboxState";
     public static final String ATTR_LAST_ENDED = "mobile.lastEndedJourneyId";
+    public static final String ATTR_LAST_PRESENCE_AT = "mobile.lastPresenceAt";
+    public static final String ATTR_LAST_POSITION_AT = "mobile.lastPositionAt";
 
     /** Vista en memoria por dispositivo (campos privados por checkstyle; ver accesores). */
     public static class PresenceView {
@@ -339,8 +341,13 @@ public class MobilePresenceTracker {
         long now = System.currentTimeMillis();
         PresenceView view = getOrHydrate(device);
         view.setLastSeenAt(now);
+        // Separación presence vs position: cualquier llegada prueba presencia;
+        // solo el fixTimeMs>0 prueba coordenada nueva. Ambas marcas viajan como
+        // epoch ms String y las persiste el UPDATE del applier (cero writes extra).
+        device.getAttributes().put(ATTR_LAST_PRESENCE_AT, Long.toString(now));
         if (fixTimeMs > 0) {
             view.setLastPositionArrivalAt(now);
+            device.getAttributes().put(ATTR_LAST_POSITION_AT, Long.toString(now));
             view.setLastFixTimeMs(Math.max(view.getLastFixTimeMs(), fixTimeMs));
             view.setGps(GpsState.OK);
             device.getAttributes().put("mobile.lastFixTime", view.getLastFixTimeMs());
@@ -625,8 +632,10 @@ public class MobilePresenceTracker {
                 }
             }
         }
-        LOGGER.info("mobile.presence device={} {}->{} reason={} age={}s",
-                device.getUniqueId(), from, to, reason, (now - view.getLastSeenAt()) / 1000);
+        LOGGER.info("mobile.presence device={} {}->{} reason={} age={}s positionAge={}s",
+                device.getUniqueId(), from, to, reason, (now - view.getLastSeenAt()) / 1000,
+                view.getLastPositionArrivalAt() > 0
+                        ? (now - view.getLastPositionArrivalAt()) / 1000 : -1L);
         return new Transition(true, from, to, reason);
     }
 
@@ -641,6 +650,10 @@ public class MobilePresenceTracker {
             attributes.put(ATTR_MQTT, view.getMqtt().name().toLowerCase());
             attributes.put(ATTR_OUTBOX, view.getOutbox().name().toLowerCase());
             attributes.put(ATTR_LAST_ENDED, view.getLastEndedJourneyId());
+            attributes.put(ATTR_LAST_PRESENCE_AT, Long.toString(view.getLastSeenAt()));
+            if (view.getLastPositionArrivalAt() > 0) {
+                attributes.put(ATTR_LAST_POSITION_AT, Long.toString(view.getLastPositionArrivalAt()));
+            }
             storage.updateObject(device, new Request(
                     new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
         } catch (Exception error) {
@@ -697,13 +710,18 @@ public class MobilePresenceTracker {
         view.setPrevPending(num(attributes, "mobile.pending"));
         Object gps = attributes.get("mobile.gps");
         view.setGpsReportedOff(gps != null && "off".equals(gps.toString()));
-        if (device.getLastUpdate() != null) {
-            view.setLastSeenAt(device.getLastUpdate().getTime());
+        long lastUpdateMs = device.getLastUpdate() != null ? device.getLastUpdate().getTime() : 0L;
+        long presenceAtMs = num(attributes, ATTR_LAST_PRESENCE_AT);
+        if (presenceAtMs > 0 || lastUpdateMs > 0) {
+            // Prioridad: la llegada más reciente entre lastUpdate del core y la
+            // marca persistida del tracker (pueden quedar desfasadas entre sí).
+            view.setLastSeenAt(Math.max(presenceAtMs, lastUpdateMs));
         } else {
             // Fila legacy sin lastUpdate: beneficio de la duda una ventana; el
             // temporizador transiciona solo cuando el silencio sea real.
             view.setLastSeenAt(System.currentTimeMillis());
         }
+        view.setLastPositionArrivalAt(Math.max(num(attributes, ATTR_LAST_POSITION_AT), lastUpdateMs));
         return view;
     }
 

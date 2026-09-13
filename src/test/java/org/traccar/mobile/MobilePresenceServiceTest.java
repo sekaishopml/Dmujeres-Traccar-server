@@ -203,6 +203,56 @@ public class MobilePresenceServiceTest {
         assertEquals(Boolean.FALSE, captor.getValue().getAttributes().get("mobile.degraded"));
     }
 
+    @Test
+    public void testPresenceArrivalDoesNotTouchLastPositionAt() throws Exception {
+        // PRESENCE-1 con el flujo real: MobilePresenceTracker.onArrival escribe las
+        // marcas y MobileTelemetryApplier las persiste en el UPDATE por mensaje.
+        MobilePresenceTracker realTracker = new MobilePresenceTracker(
+                30_000L, 60_000L, 120_000L, 60_000L, 30_000L,
+                storage, mock(NotificationManager.class), journeyRegistry);
+        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage, realTracker);
+        MobilePresenceService realService = new MobilePresenceService(
+                mock(MobileMessageStore.class),
+                journeyRegistry,
+                connectionManager,
+                mock(NotificationManager.class),
+                telemetry,
+                realTracker,
+                storage);
+        Device device = device();
+
+        // Llegada previa CON posición: fija ambas marcas.
+        realTracker.onArrival(device, json("{\"payload\":{\"network\":\"wifi\",\"battery\":50}}"),
+                MobileChannel.MQTT, 1_700_000_000_000L);
+        Object previousPositionAt =
+                device.getAttributes().get(MobilePresenceTracker.ATTR_LAST_POSITION_AT);
+        long previousPositionArrival = realTracker.getView(DEVICE_ID).getLastPositionArrivalAt();
+        assertNotNull(previousPositionAt);
+
+        // SOLO presencia (telemetría), sin posición.
+        realTracker.onArrival(device, json("{\"payload\":{\"network\":\"wifi\",\"battery\":80}}"),
+                MobileChannel.MQTT, -1L);
+        MobilePresenceService.PresenceOutcome outcome = realService.handlePresence(
+                device, envelope(),
+                json("{\"payload\":{\"battery\":80,\"network\":\"wifi\"}}"),
+                message(), MobileChannel.MQTT);
+
+        assertEquals(MobilePresenceService.PresenceOutcome.ACCEPTED, outcome);
+        assertEquals(previousPositionArrival, realTracker.getView(DEVICE_ID).getLastPositionArrivalAt());
+
+        ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
+        // 1) persistencia de transición del tracker, 2) UPDATE del applier.
+        verify(storage, times(2)).updateObject(captor.capture(), any(Request.class));
+        Device persisted = captor.getAllValues().get(1);
+        String presenceAt = (String) persisted.getAttributes()
+                .get(MobilePresenceTracker.ATTR_LAST_PRESENCE_AT);
+        assertNotNull(presenceAt);
+        assertTrue(Long.parseLong(presenceAt) > Long.parseLong(previousPositionAt.toString()));
+        // lastPositionAt NO se movió por la presencia.
+        assertEquals(previousPositionAt,
+                persisted.getAttributes().get(MobilePresenceTracker.ATTR_LAST_POSITION_AT));
+    }
+
     private static Device device() {
         Device device = new Device();
         device.setId(DEVICE_ID);

@@ -41,6 +41,31 @@ public class MobileIngestionServiceTest {
         assertEquals("2026-08-12T12:00:00Z", envelope.getObservedAt());
     }
 
+    @Test
+    public void testToPositionMapsQualityAttributes() {
+        MobileEnvelope envelope = envelope("msg-10", 4);
+        MobileEnvelope.Payload payload = envelope.getPayload();
+        payload.setSpeedAccuracyMps(1.5f);
+        payload.setBearingAccuracyDeg(10.0f);
+        payload.setAltitudeAccuracyM(12.5);
+        payload.setConfidence(90);
+        payload.setGnssUsed(8);
+        payload.setGnssTotal(12);
+        payload.setSessionId("session-abc");
+        payload.setBootId("boot-xyz");
+
+        Position position = MobileIngestionService.toPosition(envelope, 42L);
+
+        assertEquals(1.5, (Double) position.getAttributes().get("speedAccuracyMps"), 0.000001);
+        assertEquals(10.0, (Double) position.getAttributes().get("bearingAccuracyDeg"), 0.000001);
+        assertEquals(12.5, (Double) position.getAttributes().get("altitudeAccuracyM"), 0.000001);
+        assertEquals(90, ((Number) position.getAttributes().get("fixConfidence")).intValue());
+        assertEquals(8, ((Number) position.getAttributes().get("gnssUsed")).intValue());
+        assertEquals(12, ((Number) position.getAttributes().get("gnssTotal")).intValue());
+        assertEquals("session-abc", position.getAttributes().get("mobile.sessionId"));
+        assertEquals("boot-xyz", position.getAttributes().get("mobile.bootId"));
+    }
+
     private static MobileEnvelope envelope(String messageId, long sequence) {
         MobileEnvelope envelope = new MobileEnvelope();
         envelope.setSchema(1);

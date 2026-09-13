@@ -15,11 +15,13 @@
  */
 package org.traccar.mobile;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class MobileEnvelopeValidatorTest {
@@ -63,6 +65,30 @@ public class MobileEnvelopeValidatorTest {
             envelope.setObservedAt(observedAt);
             assertDoesNotThrow(() -> MobileEnvelopeValidator.validate(envelope, "device-123", NOW));
         }
+    }
+
+    @Test
+    public void testAcceptsUnknownOptionalFields() throws Exception {
+        String raw = "{\"schema\":1,\"type\":\"position\",\"messageId\":\"01J00000000000000000000001\","
+                + "\"deviceId\":\"device-123\",\"sequence\":1,"
+                + "\"sentAt\":\"" + NOW + "\",\"observedAt\":\"" + NOW + "\","
+                + "\"futureEnvelopeField\":123,"
+                + "\"payload\":{\"latitude\":-33.45,\"longitude\":-70.67,\"accuracy\":8.2,"
+                + "\"sessionId\":\"session-1\",\"bootId\":\"boot-2\","
+                + "\"speedAccuracyMps\":1.5,\"bearingAccuracyDeg\":10.0,"
+                + "\"altitudeAccuracyM\":12.5,\"confidence\":90,"
+                + "\"gnssUsed\":8,\"gnssTotal\":12,\"futurePayloadField\":true}}";
+        MobileEnvelope envelope = new ObjectMapper().readValue(raw, MobileEnvelope.class);
+
+        assertDoesNotThrow(() -> MobileEnvelopeValidator.validate(envelope, "device-123", NOW));
+        assertEquals("session-1", envelope.getPayload().getSessionId());
+        assertEquals("boot-2", envelope.getPayload().getBootId());
+        assertEquals(1.5f, envelope.getPayload().getSpeedAccuracyMps(), 0.0f);
+        assertEquals(10.0f, envelope.getPayload().getBearingAccuracyDeg(), 0.0f);
+        assertEquals(12.5, envelope.getPayload().getAltitudeAccuracyM(), 0.0);
+        assertEquals(90, envelope.getPayload().getConfidence().intValue());
+        assertEquals(8, envelope.getPayload().getGnssUsed().intValue());
+        assertEquals(12, envelope.getPayload().getGnssTotal().intValue());
     }
 
     private static MobileEnvelope valid() {

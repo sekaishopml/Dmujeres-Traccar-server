@@ -134,6 +134,18 @@ public class MobileTelemetryApplier {
         if (telemetry.hasNonNull("rejectBreakdown")) {
             device.getAttributes().put("mobile.rejectBreakdown", telemetry.get("rejectBreakdown").asText());
         }
+        if (telemetry.hasNonNull("sessionId")) {
+            String candidate = telemetry.get("sessionId").asText();
+            if (!candidate.isBlank()) {
+                device.getAttributes().put("mobile.sessionId", candidate);
+            }
+        }
+        if (telemetry.hasNonNull("bootId")) {
+            String candidate = telemetry.get("bootId").asText();
+            if (!candidate.isBlank()) {
+                device.getAttributes().put("mobile.bootId", candidate);
+            }
+        }
         // Causa de pérdida de red reportada por la app (ver NET_CAUSE_WHITELIST).
         // Cada clave solo se persiste si viene en el payload; mobile.causeAt
         // (epoch ms del momento de recepción) solo se toca si vino al menos

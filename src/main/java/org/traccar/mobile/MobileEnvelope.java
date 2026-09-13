@@ -16,6 +16,7 @@
 package org.traccar.mobile;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class MobileEnvelope {
@@ -104,6 +105,86 @@ public class MobileEnvelope {
         private Double altitude;
         private String provider;
         private Long fixAgeSec;
+        @JsonProperty("sessionId")
+        private String sessionId;
+        @JsonProperty("bootId")
+        private String bootId;
+        @JsonProperty("speedAccuracyMps")
+        private Float speedAccuracyMps;
+        @JsonProperty("bearingAccuracyDeg")
+        private Float bearingAccuracyDeg;
+        @JsonProperty("altitudeAccuracyM")
+        private Double altitudeAccuracyM;
+        @JsonProperty("confidence")
+        private Integer confidence;
+        @JsonProperty("gnssUsed")
+        private Integer gnssUsed;
+        @JsonProperty("gnssTotal")
+        private Integer gnssTotal;
+
+        public String getSessionId() {
+            return sessionId;
+        }
+
+        public void setSessionId(String sessionId) {
+            this.sessionId = sessionId;
+        }
+
+        public String getBootId() {
+            return bootId;
+        }
+
+        public void setBootId(String bootId) {
+            this.bootId = bootId;
+        }
+
+        public Float getSpeedAccuracyMps() {
+            return speedAccuracyMps;
+        }
+
+        public void setSpeedAccuracyMps(Float speedAccuracyMps) {
+            this.speedAccuracyMps = speedAccuracyMps;
+        }
+
+        public Float getBearingAccuracyDeg() {
+            return bearingAccuracyDeg;
+        }
+
+        public void setBearingAccuracyDeg(Float bearingAccuracyDeg) {
+            this.bearingAccuracyDeg = bearingAccuracyDeg;
+        }
+
+        public Double getAltitudeAccuracyM() {
+            return altitudeAccuracyM;
+        }
+
+        public void setAltitudeAccuracyM(Double altitudeAccuracyM) {
+            this.altitudeAccuracyM = altitudeAccuracyM;
+        }
+
+        public Integer getConfidence() {
+            return confidence;
+        }
+
+        public void setConfidence(Integer confidence) {
+            this.confidence = confidence;
+        }
+
+        public Integer getGnssUsed() {
+            return gnssUsed;
+        }
+
+        public void setGnssUsed(Integer gnssUsed) {
+            this.gnssUsed = gnssUsed;
+        }
+
+        public Integer getGnssTotal() {
+            return gnssTotal;
+        }
+
+        public void setGnssTotal(Integer gnssTotal) {
+            this.gnssTotal = gnssTotal;
+        }
 
         public String getProvider() {
             return provider;

@@ -447,6 +447,30 @@ public class MobileIngestionService {
         if (value.getSpeed() != null) {
             position.setSpeed(UnitsConverter.knotsFromKph(value.getSpeed()));
         }
+        if (value.getSpeedAccuracyMps() != null) {
+            position.set("speedAccuracyMps", value.getSpeedAccuracyMps());
+        }
+        if (value.getBearingAccuracyDeg() != null) {
+            position.set("bearingAccuracyDeg", value.getBearingAccuracyDeg());
+        }
+        if (value.getAltitudeAccuracyM() != null) {
+            position.set("altitudeAccuracyM", value.getAltitudeAccuracyM());
+        }
+        if (value.getConfidence() != null) {
+            position.set("fixConfidence", value.getConfidence());
+        }
+        if (value.getGnssUsed() != null) {
+            position.set("gnssUsed", value.getGnssUsed());
+        }
+        if (value.getGnssTotal() != null) {
+            position.set("gnssTotal", value.getGnssTotal());
+        }
+        if (value.getSessionId() != null && !value.getSessionId().isBlank()) {
+            position.set("mobile.sessionId", value.getSessionId());
+        }
+        if (value.getBootId() != null && !value.getBootId().isBlank()) {
+            position.set("mobile.bootId", value.getBootId());
+        }
         position.setValid(true);
         return position;
     }
