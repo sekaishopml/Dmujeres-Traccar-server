@@ -19,6 +19,7 @@ import jakarta.inject.Inject;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
 import org.traccar.helper.UnitsConverter;
+import org.traccar.helper.model.PositionUtil;
 import org.traccar.model.Event;
 import org.traccar.model.Position;
 import org.traccar.session.cache.CacheManager;
@@ -40,6 +41,9 @@ public class BehaviorEventHandler extends BaseEventHandler {
     @Override
     public void onPosition(Position position, Callback callback) {
 
+        if (!PositionUtil.isLatest(cacheManager, position)) {
+            return;
+        }
         Position lastPosition = cacheManager.getPosition(position.getDeviceId());
         if (lastPosition != null && !position.getFixTime().equals(lastPosition.getFixTime())) {
             double acceleration = UnitsConverter.mpsFromKnots(position.getSpeed() - lastPosition.getSpeed()) * 1000

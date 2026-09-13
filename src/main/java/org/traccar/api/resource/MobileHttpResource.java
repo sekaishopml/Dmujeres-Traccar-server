@@ -53,6 +53,9 @@ public class MobileHttpResource extends BaseResource {
     // devolvemos 503 Retry-After y el cliente reintenta con backoff.
     private static final Semaphore CONCURRENCY_LIMIT = new Semaphore(20);
 
+    /** Defensa ante batches gigantes (el cliente real envía <= 50 por flush). */
+    public static final int MAX_BATCH_ITEMS = 200;
+
     private final Config config;
     private final ObjectMapper mapper;
     private final MobileIngestionService ingestion;
@@ -76,6 +79,23 @@ public class MobileHttpResource extends BaseResource {
             return Response.status(Response.Status.UNAUTHORIZED).build();
         }
 
+        // Límite de tamaño del batch: se valida ANTES de adquirir el semáforo de
+        // proceso para que un batch gigante no consuma un slot ni serialice el join.
+        // Defensa ante clientes defectuosos: el cliente real envía <= 50 por flush.
+        JsonNode precheck;
+        try {
+            precheck = mapper.readTree(body);
+        } catch (Exception error) {
+            LOGGER.warn("Invalid mobile HTTP batch payload", error);
+            return Response.status(Response.Status.BAD_REQUEST).build();
+        }
+        if (precheck.isArray() && batchTooLarge(precheck.size())) {
+            LOGGER.warn("Mobile HTTP batch rejected: {} items exceeds limit {}", precheck.size(), MAX_BATCH_ITEMS);
+            return Response.status(Response.Status.REQUEST_ENTITY_TOO_LARGE)
+                    .entity(new Result(List.of(new Ack(null, null, 0, "batch_too_large"))))
+                    .build();
+        }
+
         // Fase B: backpressure con semáforo 20 para no agotar HikariCP.
         // Si hay 20 requests concurrentes ya en curso, devolvemos 503 con Retry-After
         // para que la app haga backoff y reintente el batch, en vez de encolar
@@ -89,13 +109,7 @@ public class MobileHttpResource extends BaseResource {
         }
         try {
             List<Ack> acks = new ArrayList<>();
-            JsonNode root;
-            try {
-                root = mapper.readTree(body);
-            } catch (Exception error) {
-                LOGGER.warn("Invalid mobile HTTP batch payload", error);
-                return Response.status(Response.Status.BAD_REQUEST).build();
-            }
+            JsonNode root = precheck;
             if (!root.isArray() || root.isEmpty()) {
                 return Response.status(Response.Status.BAD_REQUEST).build();
             }
@@ -127,12 +141,18 @@ public class MobileHttpResource extends BaseResource {
             }
 
             if (acks.stream().anyMatch(ack -> "error".equals(ack.status()))) {
-                return Response.status(Response.Status.SERVICE_UNAVAILABLE).entity(new Result(acks)).build();
+                return Response.status(Response.Status.SERVICE_UNAVAILABLE)
+                        .header("Retry-After", "2")
+                        .entity(new Result(acks)).build();
             }
             return Response.ok(new Result(acks)).build();
         } finally {
             CONCURRENCY_LIMIT.release();
         }
+    }
+
+    public static boolean batchTooLarge(int size) {
+        return size > MAX_BATCH_ITEMS;
     }
 
     public record Ack(String deviceId, String messageId, long sequence, String status) {}

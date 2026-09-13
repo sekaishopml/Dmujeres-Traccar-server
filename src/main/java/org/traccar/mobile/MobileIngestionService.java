@@ -209,12 +209,9 @@ public class MobileIngestionService {
             if (verdict == MobileQualityFilter.Verdict.DUPLICATE) {
                 // Re-entrega cacheada del mismo fix de red: no se guarda la fila, pero el
                 // mensaje se cierra sin posición y el ACK duplicate drena la cola del móvil.
-                // Telemetría y ONLINE se aplican igual para no congelar el panel.
-                try {
-                    telemetry.applyTelemetry(device, root);
-                } catch (Exception telemetryError) {
-                    LOGGER.warn("Failed to apply mobile telemetry", telemetryError);
-                }
+                // Telemetría omitida: la posición ya se confirmó antes y el reenvío del
+                // duplicate lleva el mismo payload, así que un UPDATE de tc_devices por
+                // re-entrega solo genera contención (replay de miles de filas).
                 connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                 connectionManager.updateDevice(true, device);
                 try {

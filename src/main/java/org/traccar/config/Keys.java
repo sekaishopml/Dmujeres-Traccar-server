@@ -51,6 +51,9 @@ public final class Keys {
     public static final ConfigKey<Integer> MOBILE_MQTT_LEASE_SECONDS = new IntegerConfigKey(
             "mobile.mqtt.leaseSeconds", List.of(KeyType.CONFIG), 60);
 
+    public static final ConfigKey<Integer> MOBILE_MQTT_PROCESSING_SWEEP_GRACE_SECONDS = new IntegerConfigKey(
+            "mobile.mqtt.processingSweepGraceSeconds", List.of(KeyType.CONFIG), 600);
+
     public static final ConfigKey<Boolean> MOBILE_HTTP_ENABLE = new BooleanConfigKey(
             "mobile.http.enable", List.of(KeyType.CONFIG), false);
 

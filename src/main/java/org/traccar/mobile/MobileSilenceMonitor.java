@@ -5,6 +5,8 @@ import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.traccar.LifecycleObject;
+import org.traccar.config.Config;
+import org.traccar.config.Keys;
 import org.traccar.database.NotificationManager;
 import org.traccar.model.Device;
 import org.traccar.model.Event;
@@ -13,6 +15,11 @@ import org.traccar.storage.query.Columns;
 import org.traccar.storage.query.Condition;
 import org.traccar.storage.query.Request;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -44,6 +51,10 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private static final long STALLED_THRESHOLD_MS = 15 * 60_000L;
     /** Resumen de métricas mobile.stats cada ~10 min (cada 20 ticks). */
     private static final int STATS_EVERY_TICKS = 20;
+    /** Barrido de processing huérfanas cada ~60 s (cada 2 ticks de 30 s). */
+    private static final int SWEEP_EVERY_TICKS = 2;
+    private static final long SWEEP_PERIOD_MS = 60_000L;
+    private static final long DEFAULT_SWEEP_GRACE_MS = 600 * 1000L;
 
     private final Storage storage;
     private final NotificationManager notificationManager;
@@ -51,6 +62,8 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private final MobileQualityFilter qualityFilter;
     private final MobilePresenceTracker tracker;
     private final MobileIngestionService ingestion;
+    private final Config config;
+    private final DataSource dataSource;
     private ScheduledExecutorService scheduler;
 
     private final java.util.concurrent.ConcurrentHashMap<Long, Long> lastStalledByDevice =
@@ -58,11 +71,13 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private long tickCount;
 
     @Inject
-    public MobileSilenceMonitor(Storage storage, NotificationManager notificationManager,
-            MobileJourneyRegistry journeyRegistry, MobileQualityFilter qualityFilter,
+    public MobileSilenceMonitor(Storage storage, NotificationManager notificationManager, Config config,
+            DataSource dataSource, MobileJourneyRegistry journeyRegistry, MobileQualityFilter qualityFilter,
             MobilePresenceTracker tracker, MobileIngestionService ingestion) {
         this.storage = storage;
         this.notificationManager = notificationManager;
+        this.config = config;
+        this.dataSource = dataSource;
         this.journeyRegistry = journeyRegistry;
         this.qualityFilter = qualityFilter;
         this.tracker = tracker;
@@ -124,9 +139,43 @@ public class MobileSilenceMonitor implements LifecycleObject {
                 LOGGER.info("mobile.stats activeJourneys={} {} {}",
                         active.size(), ingestion.formatOutcomeStats(), tracker.formatStats());
             }
+            if (tickCount % SWEEP_EVERY_TICKS == 0) {
+                sweepProcessing(now);
+            }
         } catch (Exception error) {
             LOGGER.warn("Mobile silence monitor check failed", error);
         }
+    }
+
+    /**
+     * Elimina filas tc_mobile_messages con status='processing' cuyo lease venció hace más
+     * de mobile.mqtt.processingSweepGraceSeconds (default 600 s). Un crash del server a
+     * mitad de proceso deja la fila huérfana y secuestra la clave (deviceId, sequence) de
+     * dedupe (hash mismatch → REJECTED) si el cliente no reenvía el mismo messageId;
+     * el lease de 60 s solo se reclama con redelivery, así que sin este barrido la fila
+     * queda eterna. accepted/rejected/expired se conservan (evidencia).
+     */
+    private void sweepProcessing(long now) {
+        long graceMs = config.getInteger(
+                Keys.MOBILE_MQTT_PROCESSING_SWEEP_GRACE_SECONDS, (int) (DEFAULT_SWEEP_GRACE_MS / 1000)) * 1000L;
+        long cutoff = now - graceMs;
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM tc_mobile_messages WHERE status = 'processing' "
+                                + "AND leaseuntil IS NOT NULL AND leaseuntil < ?")) {
+            statement.setTimestamp(1, new Timestamp(cutoff));
+            int deleted = statement.executeUpdate();
+            if (deleted > 0) {
+                LOGGER.info("processing sweep: deleted {} orphaned mobile messages "
+                        + "(lease expired more than {} s ago)", deleted, graceMs / 1000);
+            }
+        } catch (SQLException error) {
+            LOGGER.warn("processing sweep failed", error);
+        }
+    }
+
+    void sweepProcessingForTest(long now) {
+        sweepProcessing(now);
     }
 
     /**

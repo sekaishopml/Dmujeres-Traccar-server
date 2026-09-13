@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import org.json.JSONArray;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.traccar.model.Device;
 import org.traccar.storage.Storage;
 import org.traccar.storage.query.Columns;
@@ -21,8 +23,19 @@ import java.util.Set;
 @Singleton
 public class MobileTelemetryApplier {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(MobileTelemetryApplier.class);
+
     /** RTT por encima de este valor (ms) se considera red degradada. */
     public static final int RTT_BAD_MS = 2000;
+
+    /** Muestras del ring mobile.batteryHistory (cada ~1 min con batería reportada). */
+    public static final int BATTERY_HISTORY_SAMPLES = 24;
+
+    /** Presupuesto de serialized attributes: si excede esto se recorta batteryHistory. */
+    public static final int ATTRIBUTES_SOFT_BUDGET = 3800;
+
+    /** Si incluso sin batteryHistory excede esto, se omite el UPDATE completo. */
+    public static final int ATTRIBUTES_HARD_BUDGET = 3900;
 
     /**
      * Causas de pérdida de red que la app puede reportar en el payload
@@ -89,7 +102,7 @@ public class MobileTelemetryApplier {
             sample.put(nowSeconds);
             sample.put(battery);
             history.put(sample);
-            while (history.length() > 100) {
+            while (history.length() > BATTERY_HISTORY_SAMPLES) {
                 history.remove(0);
             }
             device.getAttributes().put("mobile.batteryHistory", history.toString());
@@ -235,6 +248,22 @@ public class MobileTelemetryApplier {
         if (isHealthyTelemetry(network, hasRtt, rttMs)) {
             device.getAttributes().put("mobile.degraded", false);
         }
+        // tc_devices.attributes es VARCHAR(4000): batteryHistory + ~25 claves mobile.*
+        // pueden desbordarlo y el fallo mataría la telemetría del device en silencio.
+        // Recorte en cascada: primero batteryHistory, y si aún excede, omitir el UPDATE
+        // (el ACK sigue accepted — la posición NO se pierde).
+        if (serializeAttributes(device).length() > ATTRIBUTES_SOFT_BUDGET
+                && device.getAttributes().containsKey("mobile.batteryHistory")) {
+            LOGGER.info("device attributes over soft budget; dropping mobile.batteryHistory for device {}",
+                    device.getId());
+            device.getAttributes().remove("mobile.batteryHistory");
+        }
+        String serialized = serializeAttributes(device);
+        if (serialized.length() > ATTRIBUTES_HARD_BUDGET) {
+            LOGGER.warn("device attributes budget exceeded ({} chars) for device {}; skipping telemetry update",
+                    serialized.length(), device.getId());
+            return;
+        }
         storage.updateObject(device, new Request(
                 new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
     }
@@ -245,6 +274,18 @@ public class MobileTelemetryApplier {
      */
     public static boolean isHealthyTelemetry(String network, boolean hasRtt, long rttMs) {
         return network != null && !"none".equals(network) && (!hasRtt || rttMs <= RTT_BAD_MS);
+    }
+
+    /**
+     * Serializa los attributes como lo hace QueryBuilder al persistir la columna
+     * (objectMapper.writeValueAsString), para medir el presupuesto real en BD.
+     */
+    public static String serializeAttributes(Device device) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(device.getAttributes());
+        } catch (Exception error) {
+            return "";
+        }
     }
 
     private static String strAttr(Device device, String key) {

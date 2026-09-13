@@ -48,6 +48,13 @@ public class DistanceHandler extends BasePositionHandler {
         }
         double totalDistance;
         Position last = cacheManager.getPosition(position.getDeviceId());
+        if (last != null && position.getFixTime() != null && last.getFixTime() != null
+                && position.getFixTime().before(last.getFixTime())) {
+            // Replay de posiciones antiguas contra la última por llegada: calcular
+            // distancia aquí escribiría valores absurdos como atributos de la fila.
+            callback.processed(false);
+            return;
+        }
         if (last != null) {
             totalDistance = last.getDouble(Position.KEY_TOTAL_DISTANCE);
             if (!position.hasAttribute(Position.KEY_DISTANCE)) {
