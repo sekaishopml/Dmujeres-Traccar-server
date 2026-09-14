@@ -111,6 +111,10 @@ public class MobileEnvelope {
         private String bootId;
         @JsonProperty("speedAccuracyMps")
         private Float speedAccuracyMps;
+        @JsonProperty("speedSource")
+        private String speedSource;
+        @JsonProperty("qualityClass")
+        private String qualityClass;
         @JsonProperty("bearingAccuracyDeg")
         private Float bearingAccuracyDeg;
         @JsonProperty("altitudeAccuracyM")
@@ -144,6 +148,22 @@ public class MobileEnvelope {
 
         public void setSpeedAccuracyMps(Float speedAccuracyMps) {
             this.speedAccuracyMps = speedAccuracyMps;
+        }
+
+        public String getSpeedSource() {
+            return speedSource;
+        }
+
+        public void setSpeedSource(String speedSource) {
+            this.speedSource = speedSource;
+        }
+
+        public String getQualityClass() {
+            return qualityClass;
+        }
+
+        public void setQualityClass(String qualityClass) {
+            this.qualityClass = qualityClass;
         }
 
         public Float getBearingAccuracyDeg() {

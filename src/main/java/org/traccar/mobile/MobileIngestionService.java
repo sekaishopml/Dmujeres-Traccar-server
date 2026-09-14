@@ -447,6 +447,12 @@ public class MobileIngestionService {
         if (value.getSpeedAccuracyMps() != null) {
             position.set("speedAccuracyMps", value.getSpeedAccuracyMps());
         }
+        if (value.getSpeedSource() != null && !value.getSpeedSource().isBlank()) {
+            position.set("speedSource", value.getSpeedSource());
+        }
+        if (value.getQualityClass() != null && !value.getQualityClass().isBlank()) {
+            position.set("qualityClass", value.getQualityClass());
+        }
         if (value.getBearingAccuracyDeg() != null) {
             position.set("bearingAccuracyDeg", value.getBearingAccuracyDeg());
         }
