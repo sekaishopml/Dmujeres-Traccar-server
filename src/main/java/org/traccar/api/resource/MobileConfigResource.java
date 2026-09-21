@@ -73,7 +73,23 @@ public class MobileConfigResource extends BaseResource {
         out.put("bufferPolicy", str(attrs, "mobile.bufferPolicy", "drop_oldest"));
         out.put("ackTimeoutSeconds", num(attrs, "mobile.ackTimeoutSeconds", 15L));
         out.put("maxRetries", num(attrs, "mobile.maxRetries", 30L));
+        // Fase L1: switches de captura por dispositivo (defaults = app).
+        out.put("l1_pending_intent_enabled", bool(attrs, "mobile.l1PendingIntentEnabled", false));
+        out.put("store_all_enabled", bool(attrs, "mobile.storeAllEnabled", false));
+        out.put("l1_max_update_delay_ms", num(attrs, "mobile.l1MaxUpdateDelayMs", 60000L));
+        out.put("min_interval_seconds", num(attrs, "mobile.minIntervalSeconds", 10L));
         return Response.ok(out).build();
+    }
+
+    private static boolean bool(Map<String, Object> attrs, String key, boolean def) {
+        Object value = attrs.get(key);
+        if (value instanceof Boolean booleanValue) {
+            return booleanValue;
+        }
+        if (value != null) {
+            return Boolean.parseBoolean(String.valueOf(value).trim());
+        }
+        return def;
     }
 
     private static long num(Map<String, Object> attrs, String key, long def) {
