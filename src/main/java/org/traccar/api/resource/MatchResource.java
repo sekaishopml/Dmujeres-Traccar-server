@@ -51,9 +51,18 @@ import java.util.stream.Stream;
 @Consumes(MediaType.APPLICATION_JSON)
 public class MatchResource extends BaseResource {
 
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(MatchResource.class);
+
     private static final String MATCH_URL = "http://127.0.0.1:8991/match";
     private static final int CHUNK_SIZE = 300;
-    private static final int MAX_REQUEST_POINTS = 2000;
+    /**
+     * R8.2 (H11): jornadas de 24 h con cadencia 10 s generan ~8 640 puntos;
+     * el tope anterior (2 000) cortaba el dibujo en silencio. 20 000 cubre
+     * hasta ~2 días completos; si se excede se marca `truncated` en la
+     * respuesta (aviso, no silencio).
+     */
+    private static final int MAX_REQUEST_POINTS = 20000;
     private static final int OVERLAP = 4;
     // Decimación de entrada: en una parada hay miles de fixes casi idénticos
     // que ahogan al Viterbi; se deja 1 punto por cada 12 m o 120 s (marcha
@@ -100,11 +109,13 @@ public class MatchResource extends BaseResource {
 
     /**
      * Match de tracks ya segmentados por el cliente (huecos temporales fuera):
-     * { "tracks": [ [[lon,lat],...], ... ], "accuracy": 25 }.
+     * { "tracks": [ [[lon,lat,speed,accuracy?],...], ... ], "accuracy": 25 }.
      * Cada track se procesa independiente (trozos de 300 con solape) y se
      * devuelve en el mismo orden: { "segments": [ [[lon,lat],...], ... ],
-     * "distance": m, "skipped": n } donde un segmento null indica que ese
-     * track no casó (el cliente dibuja ahí el trazo honesto).
+     * "distance": m, "skipped": n, "snappedRatio": 0-1 } donde un segmento
+     * null indica que ese track no casó (el cliente dibuja ahí el trazo
+     * honesto). "snappedRatio" = puntos casados / puntos evaluados por el
+     * matcher (calidad del replay).
      */
     @POST
     public Response matchTracks(JsonNode body) {
@@ -112,6 +123,8 @@ public class MatchResource extends BaseResource {
         ArrayNode segments = mapper.createArrayNode();
         double totalDistance = 0;
         int skipped = 0;
+        int totalSnapped = 0;
+        int totalSent = 0;
         try {
             permissionsService.checkPermission(Device.class, getUserId(), body.path("deviceId").asLong(0));
             double accuracy = body.path("accuracy").asDouble(30.0);
@@ -133,7 +146,12 @@ public class MatchResource extends BaseResource {
                     if (coord.isArray() && coord.size() >= 2
                             && Double.isFinite(coord.get(0).asDouble())
                             && Double.isFinite(coord.get(1).asDouble())) {
-                        points.add(new double[]{coord.get(0).asDouble(), coord.get(1).asDouble()});
+                        // El 3er elemento del track honesto es la velocidad (nudos)
+                        // y no se usa aquí; el 4º, opcional, es la accuracy real del
+                        // fix para el sigma del matcher (0 = sin dato).
+                        double pointAccuracy = coord.size() >= 4 ? coord.get(3).asDouble() : 0;
+                        points.add(new double[]{
+                                coord.get(0).asDouble(), coord.get(1).asDouble(), pointAccuracy});
                     }
                 }
                 if (points.size() < 2) {
@@ -147,6 +165,8 @@ public class MatchResource extends BaseResource {
                     skipped += 1;
                     continue;
                 }
+                totalSnapped += matched.snapped;
+                totalSent += matched.sent;
                 ArrayNode segment = mapper.createArrayNode();
                 double previousLon = Double.NaN;
                 double previousLat = Double.NaN;
@@ -168,6 +188,10 @@ public class MatchResource extends BaseResource {
             response.set("segments", segments);
             response.put("distance", totalDistance);
             response.put("skipped", skipped);
+            // Calidad del match del replay: puntos casados / puntos enviados.
+            // El matcher filtra observaciones redundantes (thinning 2σ), así que
+            // el denominador es lo efectivamente evaluado, no el crudo.
+            response.put("snappedRatio", totalSent > 0 ? (double) totalSnapped / totalSent : 0);
             cachedPut(cacheKey, response);
             return Response.ok(response).build();
         } catch (Exception e) {
@@ -180,6 +204,8 @@ public class MatchResource extends BaseResource {
     private static class MatchedTrack {
         final List<double[]> coords = new ArrayList<>();
         double distance = 0;
+        int snapped = 0;
+        int sent = 0;
     }
 
     @GET
@@ -215,10 +241,19 @@ public class MatchResource extends BaseResource {
             return Response.ok(empty).build();
         }
 
+        boolean truncated = positions.size() > MAX_REQUEST_POINTS;
+        if (truncated) {
+            positions = positions.subList(0, MAX_REQUEST_POINTS);
+            LOGGER.warn("Match: jornada con más de {} puntos, respuesta TRUNCADA (deviceId={})",
+                    MAX_REQUEST_POINTS, deviceId);
+        }
         positions = decimateForMatch(positions);
         List<double[]> points = new ArrayList<>();
         for (Position position : positions) {
-            points.add(new double[]{position.getLongitude(), position.getLatitude()});
+            // Accuracy real por fix (0 si el equipo no la reporta): el matcher
+            // usa la peor del track, con tope defensivo de 50 m.
+            points.add(new double[]{
+                    position.getLongitude(), position.getLatitude(), position.getAccuracy()});
         }
         MatchedTrack matchedTrack = matchPoints(points, accuracy);
         ObjectNode response = mapper.createObjectNode();
@@ -248,6 +283,7 @@ public class MatchResource extends BaseResource {
         response.put("distance", honestDistance);
         response.put("raw", positions.size());
         response.put("accuracy", accuracy);
+        response.put("snappedRatio", matchedTrack.sent > 0 ? (double) matchedTrack.snapped / matchedTrack.sent : 0);
         cachedPut(cacheKey, response);
         return Response.ok(response).build();
     }
@@ -267,6 +303,17 @@ public class MatchResource extends BaseResource {
                 return null;
             }
             track.distance += result.path("distance").asDouble(0);
+            int sent = result.path("filtered").asInt(result.path("raw").asInt(0));
+            if (sent > 0) {
+                track.sent += sent;
+                if (result.has("snapped")) {
+                    track.snapped += result.path("snapped").asInt(0);
+                } else {
+                    // Compatibilidad con un matcher aún sin reiniciar: el ratio
+                    // ya venía calculado por el servicio.
+                    track.snapped += (int) Math.round(result.path("snappedRatio").asDouble(0) * sent);
+                }
+            }
             boolean first = true;
             for (JsonNode coord : result.path("matched")) {
                 // Quita el primer punto de los trozos solapados para no duplicar la unión.
@@ -323,6 +370,9 @@ public class MatchResource extends BaseResource {
                 ArrayNode point = mapper.createArrayNode();
                 point.add(position[0]);
                 point.add(position[1]);
+                if (position.length >= 3 && Double.isFinite(position[2]) && position[2] > 0) {
+                    point.add(position[2]);
+                }
                 points.add(point);
             }
             request.set("points", points);

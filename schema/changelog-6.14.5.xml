@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd">
+
+  <!-- F2: tokens FCM por dispositivo (recovery) + auditoría extendida.
+       Reutiliza tc_recovery_event (F0) y NO toca tc_positions. -->
+
+  <changeSet id="changelog-6.14.5-fcm-tokens" author="dmujeres">
+    <preConditions onFail="MARK_RAN">
+      <not><tableExists tableName="tc_fcm_tokens" /></not>
+    </preConditions>
+    <createTable tableName="tc_fcm_tokens">
+      <column name="id" type="bigint" autoIncrement="true">
+        <constraints primaryKey="true" nullable="false" />
+      </column>
+      <column name="deviceid" type="integer">
+        <constraints nullable="false" />
+      </column>
+      <column name="token" type="varchar(512)">
+        <constraints nullable="false" />
+      </column>
+      <column name="previous_token" type="varchar(512)">
+        <constraints nullable="true" />
+      </column>
+      <column name="active" type="boolean" defaultValueBoolean="true">
+        <constraints nullable="false" />
+      </column>
+      <column name="invalid" type="boolean" defaultValueBoolean="false">
+        <constraints nullable="false" />
+      </column>
+      <column name="createdat" type="timestamp without time zone">
+        <constraints nullable="false" />
+      </column>
+      <column name="updatedat" type="timestamp without time zone">
+        <constraints nullable="false" />
+      </column>
+      <column name="lastusedat" type="timestamp without time zone">
+        <constraints nullable="true" />
+      </column>
+    </createTable>
+    <createIndex tableName="tc_fcm_tokens" indexName="idx_fcm_tokens_device" unique="false">
+      <column name="deviceid" />
+    </createIndex>
+    <createIndex tableName="tc_fcm_tokens" indexName="idx_fcm_tokens_token" unique="true">
+      <column name="token" />
+    </createIndex>
+  </changeSet>
+
+  <changeSet id="changelog-6.14.5-recovery-event-fcm-audit" author="dmujeres">
+    <preConditions onFail="MARK_RAN">
+      <not><columnExists tableName="tc_recovery_event" columnName="fcmmsgid" /></not>
+    </preConditions>
+    <addColumn tableName="tc_recovery_event">
+      <column name="fcmmsgid" type="varchar(128)">
+        <constraints nullable="true" />
+      </column>
+      <column name="fcmpriority" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="source" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+    </addColumn>
+  </changeSet>
+</databaseChangeLog>

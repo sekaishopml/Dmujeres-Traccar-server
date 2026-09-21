@@ -7,9 +7,14 @@ import org.json.JSONArray;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.traccar.model.Device;
+import org.traccar.database.NotificationManager;
+import org.traccar.model.Event;
 import org.traccar.storage.Storage;
 import org.traccar.storage.query.Columns;
 import org.traccar.storage.query.Condition;
+
+import java.util.Collections;
+import java.util.List;
 import org.traccar.storage.query.Request;
 
 import java.util.Set;
@@ -61,11 +66,14 @@ public class MobileTelemetryApplier {
 
     private final Storage storage;
     private final MobilePresenceTracker tracker;
+    private final NotificationManager notificationManager;
 
     @Inject
-    public MobileTelemetryApplier(Storage storage, MobilePresenceTracker tracker) {
+    public MobileTelemetryApplier(Storage storage, MobilePresenceTracker tracker,
+                                  NotificationManager notificationManager) {
         this.storage = storage;
         this.tracker = tracker;
+        this.notificationManager = notificationManager;
     }
 
     /** Actualiza atributos de telemetría del dispositivo sin borrar los existentes. */
@@ -117,10 +125,39 @@ public class MobileTelemetryApplier {
             device.getAttributes().put("mobile.model", telemetry.get("model").asText());
         }
         if (telemetry.hasNonNull("appVersion")) {
-            device.getAttributes().put("mobile.appVersion", telemetry.get("appVersion").asText());
+            String newVersion = telemetry.get("appVersion").asText();
+            Object previousVersion = device.getAttributes().get("mobile.appVersion");
+            if (previousVersion != null
+                    && !String.valueOf(previousVersion).equals(newVersion)) {
+                // R8.2: la actualización de la app queda como evento visible.
+                Event appUpdated = new Event("mobileAppUpdated", device.getId());
+                appUpdated.getAttributes().put("from", String.valueOf(previousVersion));
+                appUpdated.getAttributes().put("to", newVersion);
+                notificationManager.updateEvents(Collections.singletonMap(appUpdated, null));
+            }
+            device.getAttributes().put("mobile.appVersion", newVersion);
+        }
+        if (telemetry.hasNonNull("otaManualPressedAt")) {
+            long pressedAt = telemetry.get("otaManualPressedAt").asLong();
+            Object stored = device.getAttributes().get("mobile.otaManualPressedAt");
+            long storedMs = stored instanceof Number number ? number.longValue() : 0L;
+            if (pressedAt > storedMs) {
+                // R8.2: la usuaria tocó el botón "Actualizar" (debajo de INICIAR).
+                Event otaManual = new Event("mobileOtaManual", device.getId());
+                otaManual.getAttributes().put("at", telemetry.get("otaManualPressedAt").asLong());
+                notificationManager.updateEvents(Collections.singletonMap(otaManual, null));
+                device.getAttributes().put("mobile.otaManualPressedAt",
+                        telemetry.get("otaManualPressedAt").asLong());
+            }
         }
         if (telemetry.hasNonNull("gps")) {
             device.getAttributes().put("mobile.gps", telemetry.get("gps").asText());
+        }
+        if (telemetry.hasNonNull("fusedFailures")) {
+            // R9: fallos del proveedor fused de Google en la jornada (ROMs donde
+            // conviene el GPS del sistema). Visible en el atributo del equipo.
+            device.getAttributes().put("mobile.fusedFailures",
+                    telemetry.get("fusedFailures").asInt());
         }
         if (telemetry.hasNonNull("journeyId")) {
             long journeyId = telemetry.get("journeyId").asLong();
@@ -141,6 +178,15 @@ public class MobileTelemetryApplier {
         // con unknown es "no se sabe", no parado confirmado (caso Joseph).
         if (telemetry.hasNonNull("speedSource")) {
             device.getAttributes().put("mobile.speedSource", telemetry.get("speedSource").asText());
+        }
+        // Estado del acelerómetro del móvil (STATIONARY|MOVING|UNKNOWN): dato
+        // AUXILIAR de observabilidad. No es autoridad de posición ni de parada;
+        // el estado calculado por el servidor es MotionStateV2 (otro concepto).
+        if (telemetry.hasNonNull("motionState")) {
+            String motionState = telemetry.get("motionState").asText();
+            if (List.of("STATIONARY", "MOVING", "UNKNOWN").contains(motionState)) {
+                device.getAttributes().put("mobile.motionState", motionState);
+            }
         }
         // Desglose de rechazos del filtro ("accuracy:3|implied:10|..."): permite
         // distinguir "GPS apagado" de "filtro mata todo" sin acceso al teléfono.

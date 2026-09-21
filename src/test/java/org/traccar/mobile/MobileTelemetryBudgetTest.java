@@ -34,7 +34,7 @@ public class MobileTelemetryBudgetTest {
     @BeforeEach
     public void setUp() {
         storage = mock(Storage.class);
-        telemetry = new MobileTelemetryApplier(storage, mock(MobilePresenceTracker.class));
+        telemetry = new MobileTelemetryApplier(storage, mock(MobilePresenceTracker.class), mock(org.traccar.database.NotificationManager.class));
     }
 
     @Test

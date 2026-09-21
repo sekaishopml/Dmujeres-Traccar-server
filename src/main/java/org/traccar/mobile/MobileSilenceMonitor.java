@@ -46,7 +46,9 @@ import java.util.concurrent.TimeUnit;
 public class MobileSilenceMonitor implements LifecycleObject {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MobileSilenceMonitor.class);
-    private static final long COOLDOWN_MS = 15 * 60_000L;
+    // R7: alineado con el umbral stationary (6 min): no tiene sentido esperar
+    // 15 min entre eventos si el umbral de silencio ya es 6.
+    private static final long COOLDOWN_MS = 6 * 60_000L;
     /** Jornada activa con mensajes pero sin coordenadas nuevas >= 15 min. */
     private static final long STALLED_THRESHOLD_MS = 15 * 60_000L;
     /** Resumen de métricas mobile.stats cada ~10 min (cada 20 ticks). */
@@ -62,6 +64,7 @@ public class MobileSilenceMonitor implements LifecycleObject {
     private final MobileQualityFilter qualityFilter;
     private final MobilePresenceTracker tracker;
     private final MobileIngestionService ingestion;
+    private final FcmRecoveryService fcmRecovery;
     private final Config config;
     private final DataSource dataSource;
     private ScheduledExecutorService scheduler;
@@ -73,7 +76,9 @@ public class MobileSilenceMonitor implements LifecycleObject {
     @Inject
     public MobileSilenceMonitor(Storage storage, NotificationManager notificationManager, Config config,
             DataSource dataSource, MobileJourneyRegistry journeyRegistry, MobileQualityFilter qualityFilter,
-            MobilePresenceTracker tracker, MobileIngestionService ingestion) {
+            MobilePresenceTracker tracker, MobileIngestionService ingestion,
+            FcmRecoveryService fcmRecovery) {
+        this.fcmRecovery = fcmRecovery;
         this.storage = storage;
         this.notificationManager = notificationManager;
         this.config = config;
@@ -141,6 +146,11 @@ public class MobileSilenceMonitor implements LifecycleObject {
             }
             if (tickCount % SWEEP_EVERY_TICKS == 0) {
                 sweepProcessing(now);
+                try {
+                    fcmRecovery.markTimeouts();
+                } catch (Exception timeoutError) {
+                    LOGGER.warn("FCM recovery timeout sweep failed", timeoutError);
+                }
             }
         } catch (Exception error) {
             LOGGER.warn("Mobile silence monitor check failed", error);
@@ -185,7 +195,12 @@ public class MobileSilenceMonitor implements LifecycleObject {
      */
     private void checkStalled(Device device, long now) {
         long lastMove = qualityFilter.lastMovementMs(device.getId());
-        if (now - lastMove < STALLED_THRESHOLD_MS) {
+        // Umbral DERIVADO del modo del device (WatchdogPolicy): moving → 5 min
+        // (captura activa 5 s con tolerancia amplia), stationary → 15 min
+        // (comportamiento conocido). Nada de un fijo sin contexto.
+        boolean moving = isDeviceMoving(device);
+        long threshold = WatchdogPolicy.stalledThresholdMs(moving);
+        if (now - lastMove < threshold) {
             lastStalledByDevice.remove(device.getId());
             return;
         }
@@ -196,6 +211,7 @@ public class MobileSilenceMonitor implements LifecycleObject {
         Event event = new Event(Event.TYPE_MOBILE_STALLED, device.getId());
         event.getAttributes().put("mobileSeverity", "warning");
         event.getAttributes().put("minutesWithoutMovement", (now - lastMove) / 60_000);
+        event.getAttributes().put("threshold", WatchdogPolicy.explain(moving, now - lastMove));
         String network = strAttr(device, "mobile.network");
         String gps = strAttr(device, "mobile.gps");
         if (network != null) {
@@ -211,6 +227,24 @@ public class MobileSilenceMonitor implements LifecycleObject {
         }
         LOGGER.info("Stalled event created for device {} ({} min receiving data without new coordinates)",
                 device.getUniqueId(), (now - lastMove) / 60_000);
+        // F2: silencio anormal confirmado → intentar FCM Recovery (feature flag,
+        // cooldown y rate limit deciden dentro del servicio; nunca lanza).
+        try {
+            fcmRecovery.onSilenceDetected(device.getId(), device.getUniqueId(),
+                    "stalled:" + (now - lastMove) / 60_000 + "min " + WatchdogPolicy.explain(moving, now - lastMove));
+        } catch (Exception recoveryError) {
+            LOGGER.warn("FCM recovery hook failed", recoveryError);
+        }
+    }
+
+    /**
+     * Modo del device para el umbral derivado: mobile.motionState (auxiliar de
+     * la app) o velocidad real reciente de la última posición conocida.
+     */
+    private boolean isDeviceMoving(Device device) {
+        // Fuente honesta y disponible: el estado de motion que reporta la app
+        // (auxiliar). Sin dato → stationary (umbral más conservador).
+        return "MOVING".equals(strAttr(device, "mobile.motionState"));
     }
 
     /**

@@ -49,7 +49,7 @@ public class MobilePresenceServiceTest {
         connectionManager = mock(ConnectionManager.class);
         tracker = mock(MobilePresenceTracker.class);
         when(tracker.shouldReopen(anyLong(), any(), anyLong())).thenReturn(true);
-        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage, tracker);
+        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage, tracker, null);
         service = new MobilePresenceService(
                 mock(MobileMessageStore.class),
                 journeyRegistry,
@@ -135,7 +135,7 @@ public class MobilePresenceServiceTest {
         JsonNode root = json("{\"payload\":{\"network\":\"wifi\",\"speedSource\":\"implied\","
                 + "\"rejectBreakdown\":\"implied:10|rule:5\"}}");
 
-        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker, null).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
@@ -165,7 +165,7 @@ public class MobilePresenceServiceTest {
         device.getAttributes().put("mobile.degraded", true);
         JsonNode root = json("{\"payload\":{\"network\":\"wifi\",\"rttMs\":150,\"signal\":3}}");
 
-        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker, null).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
@@ -181,7 +181,7 @@ public class MobilePresenceServiceTest {
         device.getAttributes().put("mobile.degraded", true);
         JsonNode root = json("{\"payload\":{\"network\":\"mobile\",\"rttMs\":5000,\"signal\":1}}");
 
-        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker, null).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
@@ -196,7 +196,7 @@ public class MobilePresenceServiceTest {
         // Sin rttMs en el payload: red viva se considera flujo sano.
         JsonNode root = json("{\"payload\":{\"network\":\"mobile\"}}");
 
-        new MobileTelemetryApplier(storage, tracker).applyTelemetry(device, root);
+        new MobileTelemetryApplier(storage, tracker, null).applyTelemetry(device, root);
 
         ArgumentCaptor<Device> captor = ArgumentCaptor.forClass(Device.class);
         verify(storage, times(1)).updateObject(captor.capture(), any(Request.class));
@@ -210,7 +210,7 @@ public class MobilePresenceServiceTest {
         MobilePresenceTracker realTracker = new MobilePresenceTracker(
                 30_000L, 60_000L, 120_000L, 60_000L, 30_000L,
                 storage, mock(NotificationManager.class), journeyRegistry);
-        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage, realTracker);
+        MobileTelemetryApplier telemetry = new MobileTelemetryApplier(storage, realTracker, null);
         MobilePresenceService realService = new MobilePresenceService(
                 mock(MobileMessageStore.class),
                 journeyRegistry,

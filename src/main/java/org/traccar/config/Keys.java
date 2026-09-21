@@ -60,6 +60,29 @@ public final class Keys {
     public static final ConfigKey<String> MOBILE_HTTP_API_KEY = new StringConfigKey(
             "mobile.http.apiKey", List.of(KeyType.CONFIG));
 
+    /**
+     * S1 (rotación sin corte): clave ANTERIOR aceptada en paralelo durante la
+     * ventana de migración de la flota. Vacía = no se acepta ninguna anterior.
+     */
+    public static final ConfigKey<String> MOBILE_HTTP_API_KEY_PREVIOUS = new StringConfigKey(
+            "mobile.http.apiKeyPrevious", List.of(KeyType.CONFIG), "");
+
+    /** F2: habilita FCM Recovery (probe HIGH priority ante silencio anormal). Default OFF. */
+    public static final ConfigKey<Boolean> FCM_RECOVERY_ENABLED = new BooleanConfigKey(
+            "fcm.recovery.enabled", List.of(KeyType.CONFIG), false);
+
+    /** F2: cooldown entre probes FCM al mismo dispositivo (segundos). */
+    public static final ConfigKey<Integer> FCM_RECOVERY_COOLDOWN_SECONDS = new IntegerConfigKey(
+            "fcm.recovery.cooldownSeconds", List.of(KeyType.CONFIG), 900);
+
+    /** F2: máximo de probes FCM por dispositivo en la ventana de una hora. */
+    public static final ConfigKey<Integer> FCM_RECOVERY_MAX_PER_HOUR = new IntegerConfigKey(
+            "fcm.recovery.maxPerHour", List.of(KeyType.CONFIG), 3);
+
+    /** F2: timeout (segundos) para exigir evidencia end-to-end tras el probe. */
+    public static final ConfigKey<Integer> FCM_RECOVERY_EVIDENCE_TIMEOUT_SECONDS = new IntegerConfigKey(
+            "fcm.recovery.evidenceTimeoutSeconds", List.of(KeyType.CONFIG), 300);
+
     public static final ConfigKey<Double> MOBILE_FILTER_ACCURACY_HIDE = new DoubleConfigKey(
             "mobile.filter.accuracyHide", List.of(KeyType.CONFIG), 80.0);
 

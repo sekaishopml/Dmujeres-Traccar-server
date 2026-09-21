@@ -65,8 +65,11 @@ public class MobileDiagnosticsResource extends BaseResource {
         if (!config.getBoolean(Keys.MOBILE_HTTP_ENABLE)) {
             return Response.status(Response.Status.NOT_FOUND).build();
         }
-        String expectedKey = config.getString(Keys.MOBILE_HTTP_API_KEY);
-        if (expectedKey == null || !Objects.equals(apiKey, expectedKey)) {
+        // S1: clave actual + anterior (ventana de rotación de flota).
+        if (!org.traccar.mobile.MobileApiKeyValidator.isValid(
+                apiKey,
+                config.getString(Keys.MOBILE_HTTP_API_KEY),
+                config.getString(Keys.MOBILE_HTTP_API_KEY_PREVIOUS))) {
             return Response.status(Response.Status.UNAUTHORIZED).build();
         }
         String uniqueId = deviceIdHeader != null && !deviceIdHeader.isBlank()

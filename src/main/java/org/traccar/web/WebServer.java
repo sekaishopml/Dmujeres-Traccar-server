@@ -57,6 +57,7 @@ import org.traccar.api.security.SecurityRequestFilter;
 import org.traccar.config.Config;
 import org.traccar.config.Keys;
 import org.traccar.helper.ObjectMapperContextResolver;
+import org.traccar.mobile.AdminAlertsResource;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -237,7 +238,11 @@ public class WebServer implements LifecycleObject {
                 SecurityRequestFilter.class,
                 CorsResponseFilter.class,
                 ResourceErrorHandler.class,
-                StreamWriter.class);
+                StreamWriter.class,
+                // El recurso de alertas vive en org.traccar.mobile (junto a los
+                // servicios que agrega): se registra explícitamente porque el
+                // escaneo de paquetes solo cubre org.traccar.api.resource.
+                AdminAlertsResource.class);
         resourceConfig.packages(ServerResource.class.getPackage().getName());
         if (resourceConfig.getClasses().stream().filter(ServerResource.class::equals).findAny().isEmpty()) {
             LOGGER.warn("Failed to load API resources");

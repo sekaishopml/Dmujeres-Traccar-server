@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd">
+
+  <!-- F0: telemetría de salud de dispositivos + eventos de recuperación.
+       Tablas planas (pequeñas): NO tocan tc_positions ni su ruta de ingestión. -->
+
+  <changeSet id="changelog-6.14.4-device-health" author="dmujeres">
+    <preConditions onFail="MARK_RAN">
+      <not><tableExists tableName="tc_device_health" /></not>
+    </preConditions>
+    <createTable tableName="tc_device_health">
+      <column name="id" type="bigint" autoIncrement="true">
+        <constraints primaryKey="true" nullable="false" />
+      </column>
+      <column name="deviceid" type="integer">
+        <constraints nullable="false" />
+      </column>
+      <column name="ts" type="timestamp without time zone">
+        <constraints nullable="false" />
+      </column>
+      <column name="manufacturer" type="varchar(64)">
+        <constraints nullable="true" />
+      </column>
+      <column name="model" type="varchar(64)">
+        <constraints nullable="true" />
+      </column>
+      <column name="androidversion" type="varchar(32)">
+        <constraints nullable="true" />
+      </column>
+      <column name="appversion" type="varchar(32)">
+        <constraints nullable="true" />
+      </column>
+      <column name="healthstate" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="fgs" type="boolean">
+        <constraints nullable="true" />
+      </column>
+      <column name="screenon" type="boolean">
+        <constraints nullable="true" />
+      </column>
+      <column name="motion" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="network" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="outbox" type="integer">
+        <constraints nullable="true" />
+      </column>
+      <column name="lastfixat" type="timestamp without time zone">
+        <constraints nullable="true" />
+      </column>
+      <column name="readiness" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="continuity" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="continuitycause" type="varchar(32)">
+        <constraints nullable="true" />
+      </column>
+      <column name="recovery" type="varchar(32)">
+        <constraints nullable="true" />
+      </column>
+      <column name="attributes" type="jsonb">
+        <constraints nullable="true" />
+      </column>
+    </createTable>
+    <createIndex tableName="tc_device_health" indexName="idx_device_health_device_ts">
+      <column name="deviceid" />
+      <column name="ts" descending="true" />
+    </createIndex>
+  </changeSet>
+
+  <changeSet id="changelog-6.14.4-recovery-event" author="dmujeres">
+    <preConditions onFail="HALT" onFailMessage="tc_recovery_event ya existe">
+      <not><tableExists tableName="tc_recovery_event" /></not>
+    </preConditions>
+    <createTable tableName="tc_recovery_event">
+      <column name="id" type="bigint" autoIncrement="true">
+        <constraints nullable="false" />
+      </column>
+      <column name="deviceid" type="integer">
+        <constraints nullable="false" />
+      </column>
+      <column name="ts" type="timestamp without time zone">
+        <constraints nullable="false" />
+      </column>
+      <column name="eventtype" type="varchar(32)">
+        <constraints nullable="false" />
+      </column>
+      <column name="reason" type="varchar(32)">
+        <constraints nullable="true" />
+      </column>
+      <column name="attemptid" type="varchar(64)">
+        <constraints nullable="true" />
+      </column>
+      <column name="status" type="varchar(16)">
+        <constraints nullable="true" />
+      </column>
+      <column name="sessionid" type="varchar(64)">
+        <constraints nullable="true" />
+      </column>
+    </createTable>
+    <createIndex tableName="tc_recovery_event" indexName="idx_recovery_event_device_ts">
+      <column name="deviceid" />
+      <column name="ts" descending="true" />
+    </createIndex>
+  </changeSet>
+</databaseChangeLog>

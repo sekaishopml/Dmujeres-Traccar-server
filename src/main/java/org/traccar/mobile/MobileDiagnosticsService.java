@@ -90,6 +90,10 @@ public class MobileDiagnosticsService {
      */
     private static final String[][] DROP_ORDER = {
             {"report", "health", "lastStartError"},
+            {"report", "deviceHealth", "androidVersion"},
+            {"report", "deviceHealth", "model"},
+            {"report", "deviceHealth", "manufacturer"},
+            {"report", "deviceHealth"},
             {"report", "app", "versionName"},
             {"report", "net", "cause"},
             {"report", "buffer", "policy"},
@@ -273,6 +277,22 @@ public class MobileDiagnosticsService {
             copyInt(health, healthNode, "speedStuck24h", 0, MAX_COUNTER);
             copyString(health, healthNode, "lastStartError", false);
             putIfNotEmpty(groups, "health", healthNode);
+
+            // F0: telemetría de compatibilidad de flota (sin PII ni coords).
+            JsonNode deviceHealth = report.path("deviceHealth");
+            ObjectNode deviceHealthNode = NODE.objectNode();
+            copyString(deviceHealth, deviceHealthNode, "manufacturer", false);
+            copyString(deviceHealth, deviceHealthNode, "model", false);
+            copyString(deviceHealth, deviceHealthNode, "androidVersion", false);
+            copyBool(deviceHealth, deviceHealthNode, "screenOn");
+            copyString(deviceHealth, deviceHealthNode, "motion", true);
+            copyString(deviceHealth, deviceHealthNode, "oem", true);
+            copyBool(deviceHealth, deviceHealthNode, "oemConfirmed");
+            copyString(deviceHealth, deviceHealthNode, "readiness", true);
+            copyString(deviceHealth, deviceHealthNode, "continuity", true);
+            copyString(deviceHealth, deviceHealthNode, "continuityCause", true);
+            copyString(deviceHealth, deviceHealthNode, "recovery", true);
+            putIfNotEmpty(groups, "deviceHealth", deviceHealthNode);
 
             if (!groups.isEmpty()) {
                 out.set("report", groups);

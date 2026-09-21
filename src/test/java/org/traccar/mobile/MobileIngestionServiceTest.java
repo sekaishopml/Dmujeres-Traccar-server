@@ -66,6 +66,32 @@ public class MobileIngestionServiceTest {
         assertEquals("boot-xyz", position.getAttributes().get("mobile.bootId"));
     }
 
+    @Test
+    public void testToPositionMapsMotionStateAuxiliary() {
+        MobileEnvelope envelope = envelope("msg-11", 5);
+        MobileEnvelope.Payload payload = envelope.getPayload();
+        payload.setMotionState("STATIONARY");
+        payload.setQualityClass("GOOD");
+        payload.setSpeedSource("implied");
+
+        Position position = MobileIngestionService.toPosition(envelope, 42L);
+
+        // motionState es AUXILIAR (sensor); no es autoridad de posición
+        assertEquals("STATIONARY", position.getAttributes().get("motionState"));
+        assertEquals("GOOD", position.getAttributes().get("qualityClass"));
+        assertEquals("implied", position.getAttributes().get("speedSource"));
+        // Doppler=0 no puede convertirlo en parado confirmado aquí: KEY_MOTION
+        // lo decide MotionHandler con evidencia GPS.
+    }
+
+    @Test
+    public void testToPositionOmitsMotionStateWhenBlank() {
+        MobileEnvelope envelope = envelope("msg-12", 6);
+        envelope.getPayload().setMotionState("  ");
+        Position position = MobileIngestionService.toPosition(envelope, 42L);
+        assertTrue(!position.getAttributes().containsKey("motionState"));
+    }
+
     private static MobileEnvelope envelope(String messageId, long sequence) {
         MobileEnvelope envelope = new MobileEnvelope();
         envelope.setSchema(1);

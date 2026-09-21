@@ -109,12 +109,16 @@ public class MobileEnvelope {
         private String sessionId;
         @JsonProperty("bootId")
         private String bootId;
+        @JsonProperty("journeyId")
+        private Long journeyId;
         @JsonProperty("speedAccuracyMps")
         private Float speedAccuracyMps;
         @JsonProperty("speedSource")
         private String speedSource;
         @JsonProperty("qualityClass")
         private String qualityClass;
+        @JsonProperty("motionState")
+        private String motionState;
         @JsonProperty("bearingAccuracyDeg")
         private Float bearingAccuracyDeg;
         @JsonProperty("altitudeAccuracyM")
@@ -136,6 +140,14 @@ public class MobileEnvelope {
 
         public String getBootId() {
             return bootId;
+        }
+
+        public Long getJourneyId() {
+            return journeyId;
+        }
+
+        public void setJourneyId(Long journeyId) {
+            this.journeyId = journeyId;
         }
 
         public void setBootId(String bootId) {
@@ -164,6 +176,14 @@ public class MobileEnvelope {
 
         public void setQualityClass(String qualityClass) {
             this.qualityClass = qualityClass;
+        }
+
+        public String getMotionState() {
+            return motionState;
+        }
+
+        public void setMotionState(String motionState) {
+            this.motionState = motionState;
         }
 
         public Float getBearingAccuracyDeg() {

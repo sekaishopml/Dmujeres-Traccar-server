@@ -197,7 +197,7 @@ public class MobileLwtThrottleTest {
             MobileMessageStore messages, MobileAtomicPersistence atomic, MobilePresenceTracker tracker) {
         return new MobileIngestionService(
                 null, new ObjectMapper(), devices, messages, atomic,
-                null, null, connectionManager, null, null, null, null, tracker);
+                null, null, connectionManager, null, null, null, null, tracker, null);
     }
 
     private static Device device() {

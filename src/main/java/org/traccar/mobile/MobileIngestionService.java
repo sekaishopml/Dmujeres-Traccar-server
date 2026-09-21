@@ -73,6 +73,7 @@ public class MobileIngestionService {
     private final MobilePresenceService presence;
     private final MobileQualityFilter quality;
     private final MobilePresenceTracker tracker;
+    private final FcmRecoveryService fcmRecovery;
 
     /**
      * Contadores de resultados por estado ACK desde el arranque (métricas
@@ -86,7 +87,9 @@ public class MobileIngestionService {
             PositionPipeline pipeline, CacheManager cacheManager, ConnectionManager connectionManager,
             MobileJourneyRegistry journeyRegistry,
             MobileTelemetryApplier telemetry, MobilePresenceService presence,
-            MobileQualityFilter quality, MobilePresenceTracker tracker) {
+            MobileQualityFilter quality, MobilePresenceTracker tracker,
+            FcmRecoveryService fcmRecovery) {
+        this.fcmRecovery = fcmRecovery;
         this.config = config;
         this.mapper = mapper;
         this.devices = devices;
@@ -163,6 +166,8 @@ public class MobileIngestionService {
             MobileEnvelopeValidator.validate(captured, topicDeviceId, Instant.now());
             Device device = devices.lookup(new String[] {topicDeviceId});
             if (device == null) {
+                // R8.2 (H4): visible, no silencioso.
+                MobileRejectionCounter.inc(MobileRejectionCounter.DEVICE_UNKNOWN);
                 return CompletableFuture.completedFuture(new Result(AckStatus.REJECTED, captured));
             }
             // Telemetría válida de dispositivo conocido: mueve liveness por LLEGADA
@@ -290,6 +295,13 @@ public class MobileIngestionService {
                             }
                             connectionManager.updateDevice(device.getId(), Device.STATUS_ONLINE, new Date());
                             connectionManager.updateDevice(true, device);
+                            // F2: evidencia real de recuperación (posición aceptada
+                            // tras un probe). Nunca lanza.
+                            try {
+                                fcmRecovery.onPositionAccepted(device.getId());
+                            } catch (Exception recoveryError) {
+                                LOGGER.warn("FCM recovery position hook failed", recoveryError);
+                            }
                             // Fase B: ya persistido atómicamente (INSERT tc_positions + UPDATE
                             // tc_mobile_messages con positionId) no llamar a completeWithoutPosition
                             // que pondría positionId=0 y rompería el link.
@@ -453,6 +465,13 @@ public class MobileIngestionService {
         if (value.getQualityClass() != null && !value.getQualityClass().isBlank()) {
             position.set("qualityClass", value.getQualityClass());
         }
+        // motionState: dato AUXILIAR del acelerómetro del móvil
+        // (MotionSensor: STATIONARY|MOVING|UNKNOWN). NO es autoridad de
+        // posición ni de parada; el estado calculado por el servidor es
+        // MotionStateV2 (otro concepto, otro atributo).
+        if (value.getMotionState() != null && !value.getMotionState().isBlank()) {
+            position.set("motionState", value.getMotionState());
+        }
         if (value.getBearingAccuracyDeg() != null) {
             position.set("bearingAccuracyDeg", value.getBearingAccuracyDeg());
         }
@@ -473,6 +492,11 @@ public class MobileIngestionService {
         }
         if (value.getBootId() != null && !value.getBootId().isBlank()) {
             position.set("mobile.bootId", value.getBootId());
+        }
+        // FASE 5: identidad de jornada en la posición para el motor de
+        // continuidad (el móvil ya la lleva en su outbox; aditivo).
+        if (value.getJourneyId() != null && value.getJourneyId() > 0L) {
+            position.set("mobile.journeyId", value.getJourneyId());
         }
         position.setValid(true);
         return position;

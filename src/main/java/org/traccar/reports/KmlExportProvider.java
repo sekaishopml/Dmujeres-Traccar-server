@@ -28,9 +28,12 @@ import org.traccar.storage.query.Request;
 import jakarta.inject.Inject;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.stream.Stream;
 import javax.xml.stream.XMLOutputFactory;
 import javax.xml.stream.XMLStreamException;
@@ -72,6 +75,36 @@ public class KmlExportProvider {
         writer.writeStartElement("name");
         writer.writeCharacters(DATE_FORMAT.format(from.toInstant()) + " - " + DATE_FORMAT.format(to.toInstant()));
         writer.writeEndElement();
+
+        // gx:Track con pares <when>/<gx:coord> emparejados (timestamps originales,
+        // sin interpolar ni inventar posiciones). Se acumulan primero en memoria
+        // porque el stream de la BD solo puede recorrerse una vez y el Placemark
+        // del LineString compatible también lo consume.
+        List<Position> trackPositions = new ArrayList<>();
+        try (Stream<Position> positions = PositionUtil.getPositionsStream(storage, deviceId, from, to)
+                .filter(position -> geofence == null || geofence.containsPosition(position))) {
+            positions.forEach(trackPositions::add);
+        }
+
+        writer.writeStartElement("gx:Track");
+        writer.writeNamespace("gx", "http://www.google.com/kml/ext/2.2");
+        writer.writeStartElement("altitudeMode");
+        writer.writeCharacters("absolute");
+        writer.writeEndElement();
+        for (Position position : trackPositions) {
+            writer.writeStartElement("when");
+            writer.writeCharacters(DateTimeFormatter.ISO_INSTANT.format(
+                    Instant.ofEpochMilli(position.getFixTime().getTime())));
+            writer.writeEndElement();
+        }
+        for (Position position : trackPositions) {
+            writer.writeStartElement("gx:coord");
+            writer.writeCharacters(String.format(
+                    "%f %f %f", position.getLongitude(), position.getLatitude(), position.getAltitude()));
+            writer.writeEndElement();
+        }
+        writer.writeEndElement();
+
         writer.writeStartElement("LineString");
         writer.writeStartElement("extrude");
         writer.writeCharacters("1");
@@ -83,15 +116,11 @@ public class KmlExportProvider {
         writer.writeCharacters("absolute");
         writer.writeEndElement();
         writer.writeStartElement("coordinates");
-        try (Stream<Position> positions = PositionUtil.getPositionsStream(storage, deviceId, from, to)
-                .filter(position -> geofence == null || geofence.containsPosition(position))) {
-            String separator = "";
-            for (var iterator = positions.iterator(); iterator.hasNext();) {
-                Position position = iterator.next();
-                writer.writeCharacters(separator + String.format(
-                        "%f,%f,%f", position.getLongitude(), position.getLatitude(), position.getAltitude()));
-                separator = " ";
-            }
+        String separator = "";
+        for (Position position : trackPositions) {
+            writer.writeCharacters(separator + String.format(
+                    "%f,%f,%f", position.getLongitude(), position.getLatitude(), position.getAltitude()));
+            separator = " ";
         }
         writer.writeEndElement();
         writer.writeEndElement();

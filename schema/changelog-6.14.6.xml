@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd">
+
+  <!-- FASE 7 (prompt maestro §21): completar la telemetría de salud.
+       La tabla tc_device_health se creó en 6.14.4 sin escritor; aquí se añade
+       el contrato de idempotencia (deviceid, ts) y los campos de sesión/evento
+       que el cliente envía. NO toca tc_positions. -->
+
+  <changeSet id="changelog-6.14.6-device-health-columns" author="dmujeres">
+    <preConditions onFail="MARK_RAN">
+      <tableExists tableName="tc_device_health" />
+      <not><columnExists tableName="tc_device_health" columnName="sessionid" /></not>
+    </preConditions>
+    <addColumn tableName="tc_device_health">
+      <column name="sessionid" type="varchar(64)">
+        <constraints nullable="true" />
+      </column>
+      <column name="elapsedms" type="bigint">
+        <constraints nullable="true" />
+      </column>
+      <column name="eventtype" type="varchar(24)">
+        <constraints nullable="true" />
+      </column>
+      <column name="reason" type="varchar(64)">
+        <constraints nullable="true" />
+      </column>
+      <column name="wallbucket" type="bigint">
+        <constraints nullable="true" />
+      </column>
+    </addColumn>
+  </changeSet>
+
+  <changeSet id="changelog-6.14.6-device-health-unique" author="dmujeres">
+    <preConditions onFail="MARK_RAN">
+      <tableExists tableName="tc_device_health" />
+      <not><indexExists indexName="idx_device_health_unique" /></not>
+    </preConditions>
+    <createIndex tableName="tc_device_health" indexName="idx_device_health_unique" unique="true">
+      <column name="deviceid" />
+      <column name="ts" />
+    </createIndex>
+  </changeSet>
+
+</databaseChangeLog>

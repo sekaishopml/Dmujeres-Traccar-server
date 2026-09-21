@@ -64,7 +64,7 @@ public class MobileProcessingSweepTest {
         MobileSilenceMonitor configured = new MobileSilenceMonitor(storage,
                 mock(NotificationManager.class), config, dataSource,
                 mock(MobileJourneyRegistry.class), mock(MobileQualityFilter.class),
-                mock(MobilePresenceTracker.class), mock(MobileIngestionService.class));
+                mock(MobilePresenceTracker.class), mock(MobileIngestionService.class), null);
         when(statement.executeUpdate()).thenReturn(0);
 
         long now = System.currentTimeMillis();
@@ -91,6 +91,7 @@ public class MobileProcessingSweepTest {
     private MobileSilenceMonitor monitor() {
         return new MobileSilenceMonitor(storage, mock(NotificationManager.class), new Config(),
                 dataSource, mock(MobileJourneyRegistry.class), mock(MobileQualityFilter.class),
-                mock(MobilePresenceTracker.class), mock(MobileIngestionService.class));
+                mock(MobilePresenceTracker.class), mock(MobileIngestionService.class),
+                mock(FcmRecoveryService.class));
     }
 }

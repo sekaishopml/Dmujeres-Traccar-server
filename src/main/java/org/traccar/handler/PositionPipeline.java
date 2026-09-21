@@ -73,6 +73,7 @@ public class PositionPipeline {
                 GeocoderHandler.class,
                 SpeedLimitHandler.class,
                 MotionHandler.class,
+                MotionStateV2Handler.class,
                 ComputedAttributesHandler.Late.class,
                 DriverHandler.class,
                 CopyAttributesHandler.class,

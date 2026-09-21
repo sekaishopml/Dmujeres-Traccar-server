@@ -420,4 +420,34 @@ public class MobileDiagnosticsServiceTest {
     private JsonNode json(String value) throws Exception {
         return mapper.readTree(value);
     }
+
+    // ------------------------------------------------------------------------------------
+    // F0: grupo deviceHealth
+    // ------------------------------------------------------------------------------------
+
+    @Test
+    public void testDeviceHealthPassesWithPiiAndSecretsDropped() throws Exception {
+        String body = "{\"deviceId\":7,\"ts\":123,\"report\":{"
+                + "\"deviceHealth\":{\"manufacturer\":\"ZTE\",\"model\":\"Z2450\","
+                + "\"androidVersion\":\"14\",\"screenOn\":true,\"motion\":\"STATIONARY\","
+                + "\"oem\":\"zte\",\"oemConfirmed\":false,\"readiness\":\"NOT_READY\","
+                + "\"continuity\":\"\",\"continuityCause\":\"\",\"recovery\":\"\","
+                + "\"latitude\":1.5,\"token\":\"nope\",\"password\":\"nope\"}}}";
+
+        service.ingest(device(), body, NOW);
+
+        JsonNode report = json(persistedDiagnostics()).get("report");
+        JsonNode dh = report.path("deviceHealth");
+        assertEquals("ZTE", dh.path("manufacturer").asText());
+        assertEquals("Z2450", dh.path("model").asText());
+        assertEquals("14", dh.path("androidVersion").asText());
+        assertTrue(dh.path("screenOn").asBoolean());
+        assertEquals("stationary", dh.path("motion").asText());
+        assertEquals("zte", dh.path("oem").asText());
+        assertEquals("not_ready", dh.path("readiness").asText());
+        // sin coords/PII/secretos aunque el cliente los mande
+        assertFalse(dh.has("latitude"));
+        assertFalse(dh.has("token"));
+        assertFalse(dh.has("password"));
+    }
 }

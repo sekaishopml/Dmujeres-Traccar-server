@@ -139,6 +139,20 @@ public class MainModule extends AbstractModule {
 
     @Singleton
     @Provides
+    public static org.traccar.mobile.FcmTokenStore provideFcmTokenStore(
+            Injector injector) {
+        return injector.getInstance(org.traccar.mobile.JdbcFcmTokenStore.class);
+    }
+
+    @Singleton
+    @Provides
+    public static org.traccar.mobile.DeviceHealthStore provideDeviceHealthStore(
+            Injector injector) {
+        return injector.getInstance(org.traccar.mobile.JdbcDeviceHealthStore.class);
+    }
+
+    @Singleton
+    @Provides
     public static Storage provideStorage(Injector injector, Config config) {
         if (config.getBoolean(Keys.DATABASE_MEMORY)) {
             return injector.getInstance(MemoryStorage.class);

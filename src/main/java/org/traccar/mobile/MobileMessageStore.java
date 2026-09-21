@@ -79,6 +79,7 @@ public class MobileMessageStore {
                 }
             }
             LOGGER.warn("Failed to reserve mobile message {}", envelope.getMessageId(), error);
+            MobileRejectionCounter.inc(MobileRejectionCounter.RESERVE_FAILED);
             return new Result(Reservation.REJECTED, null);
         }
     }
@@ -99,6 +100,7 @@ public class MobileMessageStore {
         if (existing.getDeviceId() != deviceId || existing.getSequence() != envelope.getSequence()
                 || !payloadHash.equals(existing.getPayloadHash())) {
             LOGGER.warn("Mobile dedupe key reused with a different payload: {}", envelope.getMessageId());
+            MobileRejectionCounter.inc(MobileRejectionCounter.DEDUPE_CONFLICT);
             return new Result(Reservation.REJECTED, existing);
         }
         return switch (existing.getStatus()) {
