@@ -336,6 +336,52 @@ public class AdminAlertsServiceTest {
     }
 
     @Test
+    public void testFunnelAlertThresholds() {
+        long now = 1_800_000_000_000L;
+        assertNull(AdminAlertsService.funnelAlert(
+                "Camión 1", DEVICE_ID, now - 23 * 3_600_000L, "1.1.22", now));
+        AdminAlertsService.Alert never = AdminAlertsService.funnelAlert(
+                "Camión 1", DEVICE_ID, null, "1.1.22", now);
+        assertNotNull(never);
+        assertEquals(AdminAlertsService.SEVERITY_WARNING, never.severity());
+        assertEquals(AdminAlertsService.CATEGORY_HEALTH_FUNNEL, never.category());
+        assertEquals(DEVICE_ID, never.deviceId());
+        AdminAlertsService.Alert warning = AdminAlertsService.funnelAlert(
+                "Camión 1", DEVICE_ID, now - 25 * 3_600_000L, "1.1.22", now);
+        assertNotNull(warning);
+        assertEquals(AdminAlertsService.SEVERITY_WARNING, warning.severity());
+        assertTrue(warning.message().contains("25 h"));
+        AdminAlertsService.Alert critical = AdminAlertsService.funnelAlert(
+                "Camión 1", DEVICE_ID, now - 50 * 3_600_000L, "1.1.22", now);
+        assertNotNull(critical);
+        assertEquals(AdminAlertsService.SEVERITY_CRITICAL, critical.severity());
+    }
+
+    @Test
+    public void testFunnelAlertSkipsVersionsWithoutFunnel() {
+        long now = 1_800_000_000_000L;
+        // Pre-F0 (1.1.20): nunca envió embudo → no es alerta, es esperado.
+        assertNull(AdminAlertsService.funnelAlert("Camión 1", DEVICE_ID, null, "1.1.20", now));
+        assertNull(AdminAlertsService.funnelAlert("Camión 1", DEVICE_ID, null, null, now));
+        assertNull(AdminAlertsService.funnelAlert("Camión 1", DEVICE_ID, null, "", now));
+        // Regresión: aunque la versión sea vieja, si envió y dejó de enviar, alerta.
+        assertNotNull(AdminAlertsService.funnelAlert(
+                "Camión 1", DEVICE_ID, now - 30 * 3_600_000L, "1.1.20", now));
+    }
+
+    @Test
+    public void testSupportsFunnelVersionCompare() {
+        assertTrue(AdminAlertsService.supportsFunnel("1.1.22"));
+        assertTrue(AdminAlertsService.supportsFunnel("1.1.23"));
+        assertTrue(AdminAlertsService.supportsFunnel("1.2.0"));
+        assertTrue(AdminAlertsService.supportsFunnel("2.0"));
+        assertFalse(AdminAlertsService.supportsFunnel("1.1.21"));
+        assertFalse(AdminAlertsService.supportsFunnel("1.1.9"));
+        assertFalse(AdminAlertsService.supportsFunnel("1.0.99"));
+        assertFalse(AdminAlertsService.supportsFunnel("basura"));
+    }
+
+    @Test
     public void testReportSystemStatusIncludesServerStart() {
         AdminAlertsService.AlertsReport report = service.collect();
         assertTrue(report.system().serverStartedAt() > 0L);

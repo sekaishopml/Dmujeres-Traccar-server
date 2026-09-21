@@ -55,6 +55,7 @@ public class AdminAlertsService {
     public static final String CATEGORY_JOURNEY_SILENCE = "journey-silence";
     public static final String CATEGORY_DEVICE_HEALTH = "device-health";
     public static final String CATEGORY_RECOVERY = "recovery";
+    public static final String CATEGORY_HEALTH_FUNNEL = "health-funnel";
     public static final String CATEGORY_BACKUP = "backup";
     public static final String CATEGORY_DISK = "disk";
     public static final String CATEGORY_WATCHDOG = "watchdog";
@@ -64,6 +65,11 @@ public class AdminAlertsService {
     public static final long SILENCE_CRITICAL_MS = 30L * 60 * 1000;
     /** Ventana de eventos recientes (24 h). */
     public static final long WINDOW_MS = 24L * 60 * 60 * 1000;
+    /** Embudo F0: warning a las 24 h sin buckets con jornada activa y equipo vivo, critical a las 48 h. */
+    public static final long FUNNEL_WARNING_MS = 24L * 60 * 60 * 1000;
+    public static final long FUNNEL_CRITICAL_MS = 48L * 60 * 60 * 1000;
+    /** Primera versión de app con embudo (F0): por debajo no se puede alertar "nunca envió". */
+    public static final String FUNNEL_MIN_APP_VERSION = "1.1.22";
     /** Respaldo: warning a las 24 h sin dump nuevo, critical a las 36 h. */
     public static final long BACKUP_WARNING_HOURS = 24L;
     public static final long BACKUP_CRITICAL_HOURS = 36L;
@@ -85,6 +91,14 @@ public class AdminAlertsService {
             WHERE h.ts >= ? AND h.eventtype IN ('PROCESS_FREEZE_DETECTED', 'CRITICAL')
             ORDER BY h.ts DESC
             LIMIT ?
+            """;
+
+    private static final String FUNNEL_SQL = """
+            SELECT d.id AS deviceid, d.name AS name, MAX(h.ts) AS lastbucket
+            FROM tc_devices d
+            LEFT JOIN tc_device_health h ON h.deviceid = d.id AND h.attributes ? 'funnel'
+            WHERE d.id = ANY (?)
+            GROUP BY d.id, d.name
             """;
 
     private static final String RECOVERY_SQL = """
@@ -153,6 +167,7 @@ public class AdminAlertsService {
         alerts.addAll(silenceAlerts(now));
         alerts.addAll(healthAlerts(now));
         alerts.addAll(recoveryAlerts(now));
+        alerts.addAll(funnelAlerts(now));
         SystemStatus system = systemStatus(now);
         alerts.addAll(systemAlerts(system, now));
         alerts.sort(ALERT_ORDER);
@@ -258,6 +273,108 @@ public class AdminAlertsService {
                 : "Estado crítico reportado por la app";
         return new Alert(severity, CATEGORY_DEVICE_HEALTH, deviceId, label(deviceName, deviceId),
                 withReason(message, reason), ts);
+    }
+
+    // ------------------------------------------------------------------
+    // F0: embudo de salud (pilotos) — jornada activa, equipo vivo, sin buckets
+    // ------------------------------------------------------------------
+
+    /**
+     * Dispositivos con jornada activa que SÍ reportan presencia (equipo vivo)
+     * pero no envían ningún bucket de embudo en 24 h. Si el equipo está mudo
+     * del todo, la alerta de jornada sin reportar ya lo cubre (sin duplicar).
+     */
+    List<Alert> funnelAlerts(long now) {
+        List<Alert> alerts = new ArrayList<>();
+        Set<Long> active = new HashSet<>(journeyRegistry.activeDeviceIds());
+        if (active.isEmpty()) {
+            return alerts;
+        }
+        try {
+            List<Device> devices = storage.getObjects(Device.class, new Request(
+                    new Columns.Include("id", "name", "uniqueId", "lastUpdate", "attributes")));
+            List<Device> alive = new ArrayList<>();
+            for (Device device : devices) {
+                if (active.contains(device.getId()) && now - lastSeenAt(device) < WINDOW_MS) {
+                    alive.add(device);
+                }
+            }
+            if (alive.isEmpty()) {
+                return alerts;
+            }
+            Long[] ids = alive.stream().map(Device::getId).toArray(Long[]::new);
+            Map<Long, Timestamp> lastBucket = new java.util.HashMap<>();
+            try (Connection connection = dataSource.getConnection();
+                    PreparedStatement statement = connection.prepareStatement(FUNNEL_SQL)) {
+                statement.setArray(1, connection.createArrayOf("bigint", ids));
+                try (ResultSet result = statement.executeQuery()) {
+                    while (result.next()) {
+                        lastBucket.put(result.getLong("deviceid"), result.getTimestamp("lastbucket"));
+                    }
+                }
+            }
+            for (Device device : alive) {
+                Timestamp ts = lastBucket.get(device.getId());
+                Object version = device.getAttributes().get("mobile.appVersion");
+                Alert alert = funnelAlert(deviceLabel(device), device.getId(),
+                        ts != null ? ts.getTime() : null, version != null ? version.toString() : null, now);
+                if (alert != null) {
+                    alerts.add(alert);
+                }
+            }
+        } catch (Exception error) {
+            LOGGER.warn("Admin alerts: funnel query failed: {}", error.getMessage());
+        }
+        return alerts;
+    }
+
+    /**
+     * Función pura: null si hay buckets recientes. Regresión (envió y dejó de
+     * enviar) se alerta a las 24 h / 48 h. "Nunca envió" solo se alerta si la
+     * versión ya incluye F0 ([FUNNEL_MIN_APP_VERSION]); antes de esa versión el
+     * silencio es esperado y alertarlo sería ruido.
+     */
+    static Alert funnelAlert(String deviceName, long deviceId, Long lastBucketAt, String appVersion, long now) {
+        if (lastBucketAt == null) {
+            if (!supportsFunnel(appVersion)) {
+                return null;
+            }
+            return new Alert(SEVERITY_WARNING, CATEGORY_HEALTH_FUNNEL, deviceId, label(deviceName, deviceId),
+                    "Jornada activa sin telemetría de salud (nunca envió embudo)", now);
+        }
+        long ageMs = now - lastBucketAt;
+        if (ageMs < FUNNEL_WARNING_MS) {
+            return null;
+        }
+        String severity = ageMs >= FUNNEL_CRITICAL_MS ? SEVERITY_CRITICAL : SEVERITY_WARNING;
+        return new Alert(severity, CATEGORY_HEALTH_FUNNEL, deviceId, label(deviceName, deviceId),
+                "Jornada activa sin telemetría de salud desde hace " + ageMs / (60L * 60 * 1000) + " h",
+                lastBucketAt);
+    }
+
+    /** Compara "1.1.22" o superior contra [FUNNEL_MIN_APP_VERSION]; ilegible = false (no alerta). */
+    static boolean supportsFunnel(String appVersion) {
+        if (appVersion == null || appVersion.isBlank()) {
+            return false;
+        }
+        String[] actual = appVersion.trim().split("\\.");
+        String[] minimum = FUNNEL_MIN_APP_VERSION.split("\\.");
+        for (int index = 0; index < minimum.length; index++) {
+            int a = index < actual.length ? parseIntSafe(actual[index]) : 0;
+            int b = parseIntSafe(minimum[index]);
+            if (a != b) {
+                return a > b;
+            }
+        }
+        return true;
+    }
+
+    private static int parseIntSafe(String value) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     // ------------------------------------------------------------------
