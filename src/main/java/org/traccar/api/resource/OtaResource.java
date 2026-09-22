@@ -65,6 +65,9 @@ import java.util.Map;
 @Produces(MediaType.APPLICATION_JSON)
 public class OtaResource extends BaseResource {
 
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(OtaResource.class);
+
     /** Carpeta por defecto del canal OTA (la que publica publish-ota.sh). */
     static final String DEFAULT_OTA_DIR = "/DMujeres-Tracking/dashboard/public";
 
@@ -85,6 +88,7 @@ public class OtaResource extends BaseResource {
     public Response check(
             @HeaderParam("X-Api-Key") String apiKey,
             @HeaderParam("X-Device-Id") String deviceIdHeader,
+            @HeaderParam("User-Agent") String userAgent,
             @QueryParam("deviceId") String deviceIdQuery,
             @QueryParam("versionCode") Long versionCode) throws Exception {
         if (!config.getBoolean(Keys.MOBILE_HTTP_ENABLE)) {
@@ -94,6 +98,10 @@ public class OtaResource extends BaseResource {
                 apiKey,
                 config.getString(Keys.MOBILE_HTTP_API_KEY),
                 config.getString(Keys.MOBILE_HTTP_API_KEY_PREVIOUS))) {
+            // Diagnóstico sin exponer la llave: quién y con qué agente intentó.
+            LOGGER.warn("OTA 401: llave inválida (device={}, ua={})",
+                    deviceIdHeader != null ? deviceIdHeader : deviceIdQuery,
+                    userAgent != null ? userAgent.substring(0, Math.min(60, userAgent.length())) : "-");
             return Response.status(Response.Status.UNAUTHORIZED).build();
         }
         String uniqueId = deviceIdHeader != null && !deviceIdHeader.isBlank()
@@ -121,9 +129,40 @@ public class OtaResource extends BaseResource {
                 uniqueId, versionCode, latestCode, minVersionCode,
                 rollout.percent(), rollout.paused(), rollout.allowList());
         if (decision == OtaRolloutPolicy.Decision.DENIED) {
+            recordOtaCheck(device, versionCode, false, userAgent);
             return Response.ok(Map.of("update", false)).build();
         }
+        recordOtaCheck(device, versionCode, true, userAgent);
         return Response.ok(latest).build();
+    }
+
+    /**
+     * Auditoría del canal OTA (sin datos personales): deja en el equipo la hora,
+     * la versión instalada, si se sirvió manifiesto y el User-Agent del cliente.
+     * Best-effort: un fallo aquí nunca afecta la respuesta. Se limita a un
+     * registro por minuto para no escribir de más con clientes que consultan
+     * cada 2 minutos.
+     */
+    private void recordOtaCheck(Device device, long versionCode, boolean update, String userAgent) {
+        try {
+            Object previous = device.getAttributes().get("mobile.lastOtaCheckAt");
+            long last = previous instanceof Number number ? number.longValue() : 0L;
+            long now = System.currentTimeMillis();
+            if (now - last < 60_000L) {
+                return;
+            }
+            device.getAttributes().put("mobile.lastOtaCheckAt", now);
+            device.getAttributes().put("mobile.lastOtaVersionCode", versionCode);
+            device.getAttributes().put("mobile.lastOtaUpdate", update);
+            if (userAgent != null && !userAgent.isBlank()) {
+                device.getAttributes().put("mobile.lastOtaUa", userAgent.substring(0, Math.min(80, userAgent.length())));
+            }
+            storage.updateObject(device, new Request(
+                    new Columns.Include("attributes"),
+                    new Condition.Equals("id", device.getId())));
+        } catch (Exception error) {
+            LOGGER.debug("OTA audit write failed: {}", error.getMessage());
+        }
     }
 
     /** Carpeta del canal OTA: env {@code DMJ_OTA_DIR} → web.path útil → default. */
