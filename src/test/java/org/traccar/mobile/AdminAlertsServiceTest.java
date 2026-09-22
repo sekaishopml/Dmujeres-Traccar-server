@@ -17,7 +17,9 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -367,6 +369,27 @@ public class AdminAlertsServiceTest {
         // Regresión: aunque la versión sea vieja, si envió y dejó de enviar, alerta.
         assertNotNull(AdminAlertsService.funnelAlert(
                 "Camión 1", DEVICE_ID, now - 30 * 3_600_000L, "1.1.20", now));
+    }
+
+    @Test
+    public void testIsNativeClient() {
+        // Sin atributo (equipos viejos) o blank: nativo → embudo esperado.
+        assertTrue(AdminAlertsService.isNativeClient(null));
+        assertTrue(AdminAlertsService.isNativeClient(Map.of()));
+        assertTrue(AdminAlertsService.isNativeClient(Map.of(AdminAlertsService.ATTR_MOBILE_CLIENT, "")));
+        assertTrue(AdminAlertsService.isNativeClient(Map.of(AdminAlertsService.ATTR_MOBILE_CLIENT, "  ")));
+        Map<String, Object> nullValue = new HashMap<>();
+        nullValue.put(AdminAlertsService.ATTR_MOBILE_CLIENT, null);
+        assertTrue(AdminAlertsService.isNativeClient(nullValue));
+        assertTrue(AdminAlertsService.isNativeClient(
+                Map.of(AdminAlertsService.ATTR_MOBILE_CLIENT, "dmujeres-native")));
+        assertTrue(AdminAlertsService.isNativeClient(
+                Map.of(AdminAlertsService.ATTR_MOBILE_CLIENT, " dmujeres-native ")));
+        // App de respaldo u otro cliente: no envía embudo → no se alerta.
+        assertFalse(AdminAlertsService.isNativeClient(
+                Map.of(AdminAlertsService.ATTR_MOBILE_CLIENT, "dmujeres-traccar")));
+        assertFalse(AdminAlertsService.isNativeClient(
+                Map.of(AdminAlertsService.ATTR_MOBILE_CLIENT, "otro")));
     }
 
     @Test

@@ -70,6 +70,9 @@ public class AdminAlertsService {
     public static final long FUNNEL_CRITICAL_MS = 48L * 60 * 60 * 1000;
     /** Primera versión de app con embudo (F0): por debajo no se puede alertar "nunca envió". */
     public static final String FUNNEL_MIN_APP_VERSION = "1.1.22";
+    /** Cliente nativo DMujeres: el único que envía embudo de salud. */
+    public static final String NATIVE_CLIENT = "dmujeres-native";
+    public static final String ATTR_MOBILE_CLIENT = "mobile.client";
     /** Respaldo: warning a las 24 h sin dump nuevo, critical a las 36 h. */
     public static final long BACKUP_WARNING_HOURS = 24L;
     public static final long BACKUP_CRITICAL_HOURS = 36L;
@@ -295,7 +298,10 @@ public class AdminAlertsService {
                     new Columns.Include("id", "name", "uniqueId", "lastUpdate", "attributes")));
             List<Device> alive = new ArrayList<>();
             for (Device device : devices) {
-                if (active.contains(device.getId()) && now - lastSeenAt(device) < WINDOW_MS) {
+                // La app de respaldo (OsmAnd + endpoint de jornada) no envía embudo:
+                // solo se alerta a clientes nativos (o devices sin mobile.client).
+                if (active.contains(device.getId()) && now - lastSeenAt(device) < WINDOW_MS
+                        && isNativeClient(device.getAttributes())) {
                     alive.add(device);
                 }
             }
@@ -350,6 +356,21 @@ public class AdminAlertsService {
         return new Alert(severity, CATEGORY_HEALTH_FUNNEL, deviceId, label(deviceName, deviceId),
                 "Jornada activa sin telemetría de salud desde hace " + ageMs / (60L * 60 * 1000) + " h",
                 lastBucketAt);
+    }
+
+    /**
+     * Cliente nativo DMujeres: {@code mobile.client} null/blank (equipos viejos,
+     * sin atributo) o exactamente "dmujeres-native". Cualquier otro valor
+     * (p. ej. "dmujeres-traccar", la app de respaldo) no envía embudo F0 y no
+     * debe generar la alerta "nunca envió".
+     */
+    static boolean isNativeClient(Map<String, Object> attributes) {
+        Object value = attributes != null ? attributes.get(ATTR_MOBILE_CLIENT) : null;
+        if (value == null) {
+            return true;
+        }
+        String client = value.toString().strip();
+        return client.isEmpty() || NATIVE_CLIENT.equals(client);
     }
 
     /** Compara "1.1.22" o superior contra [FUNNEL_MIN_APP_VERSION]; ilegible = false (no alerta). */
