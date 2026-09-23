@@ -53,7 +53,12 @@ public class MobileConfigResource extends BaseResource {
             return Response.status(Response.Status.NOT_FOUND).build();
         }
         String expectedKey = config.getString(Keys.MOBILE_HTTP_API_KEY);
-        if (expectedKey == null || !Objects.equals(apiKey, expectedKey)) {
+        String previousKey = config.getString(Keys.MOBILE_HTTP_API_KEY_PREVIOUS);
+        // Igual que el resto de canales móviles: durante una rotación se acepta
+        // también la llave anterior (así los teléfonos ya entregados no se
+        // quedan sin validar el acceso).
+        if (expectedKey == null ||
+                (!Objects.equals(apiKey, expectedKey) && !Objects.equals(apiKey, previousKey))) {
             return Response.status(Response.Status.UNAUTHORIZED).build();
         }
         String deviceId = deviceIdHeader != null && !deviceIdHeader.isBlank()
