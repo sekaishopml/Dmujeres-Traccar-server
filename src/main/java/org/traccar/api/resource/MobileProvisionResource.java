@@ -66,19 +66,29 @@ public class MobileProvisionResource extends BaseResource {
                     ? request.getUsername() : request.getName());
             device.setUniqueId(request.getUsername());
             device.getAttributes().put("mobile.intervalSeconds", request.getIntervalSeconds());
+            device.getAttributes().put("mobile.minIntervalSeconds", request.getMinIntervalSeconds());
             device.getAttributes().put("mobile.bufferMax", request.getBufferMax());
             device.getAttributes().put("mobile.bufferPolicy", request.getBufferPolicy());
             device.getAttributes().put("mobile.ackTimeoutSeconds", request.getAckTimeoutSeconds());
             device.getAttributes().put("mobile.maxRetries", request.getMaxRetries());
+            device.getAttributes().put("mobile.distanceMeters", request.getDistanceMeters());
+            device.getAttributes().put("mobile.angleDegrees", request.getAngleDegrees());
+            device.getAttributes().put("mobile.accuracy", request.getAccuracy());
+            device.getAttributes().put("mobile.bufferEnabled", request.getBufferEnabled());
             device.setId(storage.addObject(device, new Request(new Columns.Exclude("id"))));
             storage.addPermission(new Permission(User.class, getUserId(), Device.class, device.getId()));
             created = true;
         } else {
             device.getAttributes().put("mobile.intervalSeconds", request.getIntervalSeconds());
+            device.getAttributes().put("mobile.minIntervalSeconds", request.getMinIntervalSeconds());
             device.getAttributes().put("mobile.bufferMax", request.getBufferMax());
             device.getAttributes().put("mobile.bufferPolicy", request.getBufferPolicy());
             device.getAttributes().put("mobile.ackTimeoutSeconds", request.getAckTimeoutSeconds());
             device.getAttributes().put("mobile.maxRetries", request.getMaxRetries());
+            device.getAttributes().put("mobile.distanceMeters", request.getDistanceMeters());
+            device.getAttributes().put("mobile.angleDegrees", request.getAngleDegrees());
+            device.getAttributes().put("mobile.accuracy", request.getAccuracy());
+            device.getAttributes().put("mobile.bufferEnabled", request.getBufferEnabled());
             storage.updateObject(device, new Request(
                     new Columns.Include("attributes"), new Condition.Equals("id", device.getId())));
         }
@@ -185,10 +195,16 @@ public class MobileProvisionResource extends BaseResource {
         private String password;
         private String name;
         private int intervalSeconds = 10;
+        private int minIntervalSeconds = 10;
         private int bufferMax = 5000;
         private String bufferPolicy = "drop_oldest";
         private int ackTimeoutSeconds = 15;
         private int maxRetries = 30;
+        // Filtros de captura con los mismos defaults de la app.
+        private int distanceMeters = 10;
+        private int angleDegrees = 15;
+        private String accuracy = "high";
+        private boolean bufferEnabled = true;
 
         public String getUsername() {
             return username;
@@ -222,6 +238,14 @@ public class MobileProvisionResource extends BaseResource {
             this.intervalSeconds = intervalSeconds;
         }
 
+        public int getMinIntervalSeconds() {
+            return minIntervalSeconds;
+        }
+
+        public void setMinIntervalSeconds(int minIntervalSeconds) {
+            this.minIntervalSeconds = minIntervalSeconds;
+        }
+
         public int getBufferMax() {
             return bufferMax;
         }
@@ -252,6 +276,38 @@ public class MobileProvisionResource extends BaseResource {
 
         public void setMaxRetries(int maxRetries) {
             this.maxRetries = maxRetries;
+        }
+
+        public int getDistanceMeters() {
+            return distanceMeters;
+        }
+
+        public void setDistanceMeters(int distanceMeters) {
+            this.distanceMeters = distanceMeters;
+        }
+
+        public int getAngleDegrees() {
+            return angleDegrees;
+        }
+
+        public void setAngleDegrees(int angleDegrees) {
+            this.angleDegrees = angleDegrees;
+        }
+
+        public String getAccuracy() {
+            return accuracy;
+        }
+
+        public void setAccuracy(String accuracy) {
+            this.accuracy = accuracy;
+        }
+
+        public boolean getBufferEnabled() {
+            return bufferEnabled;
+        }
+
+        public void setBufferEnabled(boolean bufferEnabled) {
+            this.bufferEnabled = bufferEnabled;
         }
     }
 

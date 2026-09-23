@@ -78,6 +78,11 @@ public class MobileConfigResource extends BaseResource {
         out.put("bufferPolicy", str(attrs, "mobile.bufferPolicy", "drop_oldest"));
         out.put("ackTimeoutSeconds", num(attrs, "mobile.ackTimeoutSeconds", 15L));
         out.put("maxRetries", num(attrs, "mobile.maxRetries", 30L));
+        // Filtros de captura por dispositivo (defaults = app).
+        out.put("distanceMeters", num(attrs, "mobile.distanceMeters", 10L));
+        out.put("angleDegrees", num(attrs, "mobile.angleDegrees", 15L));
+        out.put("accuracy", str(attrs, "mobile.accuracy", "high"));
+        out.put("bufferEnabled", bool(attrs, "mobile.bufferEnabled", true));
         // Fase L1: switches de captura por dispositivo (defaults = app).
         out.put("l1_pending_intent_enabled", bool(attrs, "mobile.l1PendingIntentEnabled", false));
         out.put("store_all_enabled", bool(attrs, "mobile.storeAllEnabled", false));
