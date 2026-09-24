@@ -65,6 +65,16 @@ public final class NewMotionProcessor {
                 }
             }
 
+            // No declarar parado si el último tramo evidencia movimiento real:
+            // tras una ráfaga (red perdida) la ventana aún puede contener solo
+            // posiciones previas a la salida y no superar minDistance, lo que
+            // generaba falsos deviceStopped en plena marcha.
+            long lastDuration = position.getFixTime().getTime() - last.getFixTime().getTime();
+            double lastDistance = DistanceCalculator.distance(last, position);
+            if (lastDuration > 0 && lastDistance / lastDuration > minAverageSpeed) {
+                return;
+            }
+
             Position oldest = positions.peekFirst();
             long duration = position.getFixTime().getTime() - oldest.getFixTime().getTime();
             if (duration >= minDuration) {

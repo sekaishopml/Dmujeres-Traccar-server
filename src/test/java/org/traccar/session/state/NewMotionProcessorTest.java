@@ -84,6 +84,64 @@ public class NewMotionProcessorTest extends BaseTest {
     }
 
     @Test
+    public void testNoStopOnFastLegDuringBurst() throws ParseException {
+        // Ráfaga en marcha (red perdida): la ventana contiene posiciones previas
+        // a la salida y aún no supera minDistance; el último tramo es rápido y
+        // no debe declararse parado (caso pilay 2026-09-23 09:33:37).
+        double minDistance = 200;
+        long minDuration = 180000;
+
+        double latitude = 0.0;
+        Deque<Position> positions = new ArrayDeque<>();
+        positions.add(position("2017-01-01 00:00:00", latitude, 0.0));
+        positions.add(position("2017-01-01 00:01:00", latitude, 0.0));
+        positions.add(position("2017-01-01 00:02:00", latitude, 0.0));
+        positions.add(position("2017-01-01 00:02:30", latitude, DistanceCalculator.getLongitudeDelta(60, latitude)));
+        positions.add(position("2017-01-01 00:03:00", latitude, DistanceCalculator.getLongitudeDelta(120, latitude)));
+
+        NewMotionState state = new NewMotionState();
+        state.setPositions(positions);
+        state.setMotionStreak(true);
+        state.setEventPosition(positions.peekFirst());
+
+        Position current = position("2017-01-01 00:03:01", latitude,
+                DistanceCalculator.getLongitudeDelta(150, latitude));
+        NewMotionProcessor.updateState(state, current, minDistance, minDuration, Long.MAX_VALUE);
+
+        assertTrue(state.getEvents().isEmpty());
+        assertTrue(state.getMotionStreak());
+    }
+
+    @Test
+    public void testStopAfterBurstWhenReallyStopped() throws ParseException {
+        // Tras la ráfaga, si el vehículo realmente se detiene (tramo lento),
+        // el parado sí debe declararse.
+        double minDistance = 200;
+        long minDuration = 180000;
+
+        double latitude = 0.0;
+        Deque<Position> positions = new ArrayDeque<>();
+        positions.add(position("2017-01-01 00:00:00", latitude, 0.0));
+        positions.add(position("2017-01-01 00:02:00", latitude, 0.0));
+        positions.add(position("2017-01-01 00:02:30", latitude, DistanceCalculator.getLongitudeDelta(60, latitude)));
+        positions.add(position("2017-01-01 00:03:00", latitude, DistanceCalculator.getLongitudeDelta(120, latitude)));
+        positions.add(position("2017-01-01 00:03:01", latitude, DistanceCalculator.getLongitudeDelta(150, latitude)));
+
+        NewMotionState state = new NewMotionState();
+        state.setPositions(positions);
+        state.setMotionStreak(true);
+        state.setEventPosition(positions.peekFirst());
+
+        Position current = position("2017-01-01 00:04:01", latitude,
+                DistanceCalculator.getLongitudeDelta(150, latitude));
+        NewMotionProcessor.updateState(state, current, minDistance, minDuration, Long.MAX_VALUE);
+
+        assertEquals(1, state.getEvents().size());
+        assertEquals(Event.TYPE_DEVICE_STOPPED, state.getEvents().get(0).getType());
+        assertFalse(state.getMotionStreak());
+    }
+
+    @Test
     public void testNoStopBeforeDuration() throws ParseException {
         double minDistance = 500;
         long minDuration = 300000;
