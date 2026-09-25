@@ -98,7 +98,10 @@ public class MobileDiagnosticsService {
             {"report", "net", "cause"},
             {"report", "buffer", "policy"},
             {"report", "mqtt", "status"},
+            {"report", "cadence"},
+            {"report", "perms"},
             {"report", "journey"},
+            {"report", "gps"},
             {"report", "app"},
             {"report", "power"},
             {"report", "net"},
@@ -239,6 +242,31 @@ public class MobileDiagnosticsService {
             copyLong(journey, journeyNode, "startAt", 0, Long.MAX_VALUE);
             putIfNotEmpty(groups, "journey", journeyNode);
 
+            // GPS real del teléfono: encendido/apagado, edad del último fix y
+            // GPS falso. Permite distinguir "sin señal" de "lo apagaron".
+            JsonNode gps = report.path("gps");
+            ObjectNode gpsNode = NODE.objectNode();
+            copyBool(gps, gpsNode, "enabled");
+            copyString(gps, gpsNode, "provider", true);
+            copyLong(gps, gpsNode, "fixAgeSec", -1, MAX_SPAN_MS);
+            copyBool(gps, gpsNode, "mock");
+            putIfNotEmpty(groups, "gps", gpsNode);
+
+            // Cadencia efectiva de captura (ms): detecta equipos con huecos.
+            JsonNode cadence = report.path("cadence");
+            ObjectNode cadenceNode = NODE.objectNode();
+            copyLong(cadence, cadenceNode, "movingMs", 0, MAX_SPAN_MS);
+            copyLong(cadence, cadenceNode, "stationaryMs", 0, MAX_SPAN_MS);
+            putIfNotEmpty(groups, "cadence", cadenceNode);
+
+            // Permisos: si falta el de fondo o los avisos, la captura se corta.
+            JsonNode perms = report.path("perms");
+            ObjectNode permsNode = NODE.objectNode();
+            copyBool(perms, permsNode, "fine");
+            copyBool(perms, permsNode, "background");
+            copyBool(perms, permsNode, "notifications");
+            putIfNotEmpty(groups, "perms", permsNode);
+
             JsonNode buffer = report.path("buffer");
             ObjectNode bufferNode = NODE.objectNode();
             copyInt(buffer, bufferNode, "pending", 0, MAX_COUNTER);
@@ -265,6 +293,7 @@ public class MobileDiagnosticsService {
             ObjectNode powerNode = NODE.objectNode();
             copyInt(power, powerNode, "battery", -1, 100);
             copyBool(power, powerNode, "exempt");
+            copyBool(power, powerNode, "charging");
             copyLong(power, powerNode, "idleMs", 0, MAX_SPAN_MS);
             putIfNotEmpty(groups, "power", powerNode);
 
@@ -406,6 +435,20 @@ public class MobileDiagnosticsService {
         long deviceId = device.getId();
         device.getAttributes().put(ATTRIBUTE_DIAGNOSTICS, json);
         device.getAttributes().put(ATTRIBUTE_DIAGNOSTICS_AT, nowMs);
+        // Atajos accionables para el panel (sin parsear el JSON completo):
+        // permiso de fondo, batería exenta, GPS falso y cadencia en movimiento.
+        try {
+            JsonNode report = mapper.readTree(json).path("report");
+            putBoolAttribute(device, "mobile.permBackground", report.path("perms"), "background");
+            putBoolAttribute(device, "mobile.batteryExempt", report.path("power"), "exempt");
+            putBoolAttribute(device, "mobile.mockLocation", report.path("gps"), "mock");
+            if (report.path("cadence").has("movingMs")) {
+                device.getAttributes().put("mobile.cadenceMovingMs",
+                        report.path("cadence").path("movingMs").asLong());
+            }
+        } catch (Exception error) {
+            LOGGER.debug("Failed to extract diagnostics shortcuts", error);
+        }
         storage.updateObject(device, new Request(
                 new Columns.Include("attributes"), new Condition.Equals("id", deviceId)));
         try {
@@ -456,6 +499,14 @@ public class MobileDiagnosticsService {
         Boolean value = asBoolean(from.get(key));
         if (value != null) {
             to.put(key, value.booleanValue());
+        }
+    }
+
+    /** Copia un booleano del grupo a un atributo del device (si viene). */
+    private static void putBoolAttribute(Device device, String attribute, JsonNode group, String key) {
+        Boolean value = asBoolean(group.get(key));
+        if (value != null) {
+            device.getAttributes().put(attribute, value.booleanValue());
         }
     }
 
